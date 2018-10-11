@@ -100,7 +100,7 @@ int PHSartre::Init(PHCompositeNode *topNode) {
   
 int PHSartre::End(PHCompositeNode *topNode) {
   
-  if (verbosity > 1) cout << "PHSartre::End - I'm here!" << endl;
+  if (Verbosity() > 1) cout << "PHSartre::End - I'm here!" << endl;
 
   cout << "PHSartre: " << " Total cross-section: " << _sartre->totalCrossSection() << " nb" << endl;
   _sartre->listStatus();   
@@ -128,7 +128,7 @@ void PHSartre::print_config() const {
 
 int PHSartre::process_event(PHCompositeNode *topNode) {
 
-  if (verbosity > 1) cout << "PHSartre::process_event - event: " << _eventcount << endl;
+  if (Verbosity() > 1) cout << "PHSartre::process_event - event: " << _eventcount << endl;
   
   bool passedTrigger = false;
   Event *event = NULL;
@@ -221,14 +221,14 @@ int PHSartre::process_event(PHCompositeNode *topNode) {
     // test trigger logic
     
     bool andScoreKeeper = true;
-    if (verbosity > 2) {
+    if (Verbosity() > 2) {
       cout << "PHSartre::process_event - triggersize: " << _registeredTriggers.size() << endl;
     }
 
     for (unsigned int tr = 0; tr < _registeredTriggers.size(); tr++) { 
       bool trigResult = _registeredTriggers[tr]->Apply(event);
 
-      if (verbosity > 2) {
+      if (Verbosity() > 2) {
 	cout << "PHSartre::process_event trigger: "
 	     << _registeredTriggers[tr]->GetName() << "  " << trigResult << endl;
       }
@@ -240,7 +240,7 @@ int PHSartre::process_event(PHCompositeNode *topNode) {
 	andScoreKeeper &= trigResult;
       }
       
-      if (verbosity > 2 && !passedTrigger) {
+      if (Verbosity() > 2 && !passedTrigger) {
 	cout << "PHSartre::process_event - failed trigger: "
 	     << _registeredTriggers[tr]->GetName() <<  endl;
       }
@@ -437,7 +437,7 @@ int PHSartre::process_event(PHCompositeNode *topNode) {
 
   // print outs
   
-  if (verbosity > 2) cout << "PHSartre::process_event - FINISHED WHOLE EVENT" << endl;
+  if (Verbosity() > 2) cout << "PHSartre::process_event - FINISHED WHOLE EVENT" << endl;
 
   ++_eventcount;
   return Fun4AllReturnCodes::EVENT_OK;
@@ -455,7 +455,7 @@ int PHSartre::ResetEvent(PHCompositeNode *topNode) {
 }
 
 void PHSartre::register_trigger(PHSartreGenTrigger *theTrigger) {
-  if(verbosity > 1) cout << "PHSartre::registerTrigger - trigger " << theTrigger->GetName() << " registered" << endl;
+  if(Verbosity() > 1) cout << "PHSartre::registerTrigger - trigger " << theTrigger->GetName() << " registered" << endl;
   _registeredTriggers.push_back(theTrigger);
 }
 

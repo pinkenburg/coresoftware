@@ -300,7 +300,7 @@ int HepMCNodeReader::process_event(PHCompositeNode *topNode)
       }  //      if (!finalstateparticles.empty())
     }
   }  // For pile-up simulation: loop end for PHHepMC event map
-  if (verbosity > 0) ineve->identify();
+  if (Verbosity() > 0) ineve->identify();
 
   return Fun4AllReturnCodes::EVENT_OK;
 }
