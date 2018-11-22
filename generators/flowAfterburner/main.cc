@@ -7,8 +7,8 @@
 #include <HepMC/GenEvent.h>
 #include <HepMC/GenVertex.h>
 #include <HepMC/GenParticle.h>
-#include <HepMC/GenRanges.h>
-#include <HepMC/IO_AsciiParticles.h>
+//#include <HepMC/GenRanges.h>
+//#include <HepMC/IO_AsciiParticles.h>
 #include <HepMC/IO_GenEvent.h>
 
 #include <CLHEP/Random/RandomEngine.h>
@@ -72,13 +72,13 @@ main ()
   // Open input file.
   HepMC::IO_GenEvent ascii_in (input.c_str(), std::ios::in);
   HepMC::IO_GenEvent ascii_out (output.c_str(), std::ios::out);
-  HepMC::GenEvent *evt;
+  HepMC::GenEvent *evt = nullptr;
 
-  while (ascii_in >> evt)
+//  while (ascii_in >> evt)
     {
       flowAfterburner(evt,engine,algorithmName,mineta,maxeta,minpt,maxpt);
 
-      ascii_out << evt;
+//      ascii_out << evt;
       delete evt;
     }
 }

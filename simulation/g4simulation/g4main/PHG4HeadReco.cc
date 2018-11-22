@@ -64,11 +64,11 @@ PHG4HeadReco::process_event(PHCompositeNode *topNode)
   if (hepmcevt)
     {
       evtseq = hepmcevt->event_number();
-      HepMC::HeavyIon *hi = hepmcevt->heavy_ion();
+      HepMC::GenHeavyIonPtr hi = hepmcevt->heavy_ion();
       if (hi)
 	{
-	  evtheader->set_ImpactParameter(hi->impact_parameter());
-	  evtheader->set_EventPlaneAngle(hi->event_plane_angle());
+	  evtheader->set_ImpactParameter(hi->impact_parameter);
+	  evtheader->set_EventPlaneAngle(hi->event_plane_angle);
 	}
     }
   evtheader->set_EvtSequence(evtseq);

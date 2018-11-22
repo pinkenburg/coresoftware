@@ -102,8 +102,9 @@ libg4testbench_la_SOURCES = \
     PHG4TruthTrackingAction.cc \
     PHG4SteppingAction.cc \
     PHG4UIsession.cc \
-    PHG4Utils.cc \
-    ReadEICFiles.cc
+    PHG4Utils.cc
+
+#    ReadEICFiles.cc
 
 libg4testbench_la_LDFLAGS = \
     -L$(libdir) \
@@ -208,7 +209,6 @@ PHG4_Dict.cc: \
   PHG4Subsystem.h \
   PHG4TruthSubsystem.h \
   PHG4Utils.h \
-  ReadEICFiles.h \
   PHG4LinkDef.h
 	rootcint -f $@ @CINTDEFS@ -c $(DEFAULT_INCLUDES) $(RINCLUDES) $^
 

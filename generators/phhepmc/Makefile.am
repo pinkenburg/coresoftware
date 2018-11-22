@@ -55,16 +55,22 @@ libphhepmc_la_SOURCES = \
   HepMCFlowAfterBurner.cc \
   HepMCFlowAfterBurner_Dict.C \
   PHHepMCGenHelper.cc \
-  PHHepMCGenHelper_Dict.C \
-  PHHepMCParticleSelectorDecayProductChain.cc \
-  PHHepMCParticleSelectorDecayProductChain_Dict.C
+  PHHepMCGenHelper_Dict.C
+
+#  PHHepMCParticleSelectorDecayProductChain.cc 
+#  PHHepMCParticleSelectorDecayProductChain_Dict.C
 
 libphhepmc_io_la_SOURCES = \
+  PHGenEvent_Dict.C \
   PHGenEventv1.cc \
+  PHGenEventv1_Dict.C \
+  PHGenEventList_Dict.C \
   PHGenEventListv1.cc \
+  PHGenEventListv1_Dict.C \
   PHHepMCGenEvent.cc \
+  PHHepMCGenEvent_Dict.C \
   PHHepMCGenEventMap.cc \
-  PHHepMC_io_Dict.C \
+  PHHepMCGenEventMap_Dict.C \
   PHGenIntegral.cc \
   PHGenIntegral_Dict.C \
   PHGenIntegralv1.cc \

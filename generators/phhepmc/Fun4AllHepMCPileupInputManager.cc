@@ -147,16 +147,16 @@ int Fun4AllHepMCPileupInputManager::run(const int nevents)
           }
           else
           {
-            evt = ascii_in->read_next_event();
+            ascii_in->read_event(*evt);
           }
         }
 
-        if (!evt)
+        if (ascii_in->failed())
         {
           if (Verbosity() > 1)
           {
-            cout << "error type: " << ascii_in->error_type()
-                 << ", rdstate: " << ascii_in->rdstate() << endl;
+        cout << "Fun4AllHepMCInputManager::run::" << Name()
+             << ", failed: " << ascii_in->failed() << endl;
           }
           fileclose();
         }

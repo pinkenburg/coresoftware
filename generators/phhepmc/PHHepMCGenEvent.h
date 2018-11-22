@@ -5,9 +5,6 @@
 #include <phool/phool.h>
 
 #include <HepMC/GenEvent.h>
-#include <HepMC/GenParticle.h>
-#include <HepMC/GenVertex.h>
-#include <HepMC/SimpleVector.h>
 
 namespace HepMC
 {

@@ -21,6 +21,7 @@
 #include <CLHEP/Random/RandomEngine.h>
 
 #include <iostream>
+#include <set>
 #include <string>
 
 using namespace std;
