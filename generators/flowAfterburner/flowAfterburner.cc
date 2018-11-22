@@ -18,13 +18,15 @@
 #include <gsl/gsl_roots.h>
      
 #include <HepMC/GenEvent.h>
-#include <HepMC/GenRanges.h>
+#include <HepMC/GenParticle.h>
+#include <HepMC/GenVertex.h>
+//#include <HepMC/GenRanges.h>
 #include <CLHEP/Random/RandFlat.h>
 #include <CLHEP/Vector/LorentzVector.h>
 
 #include <set>
 #include <cmath>
-
+#include <iostream>
 flowAfterburnerAlgorithm algorithm;
 std::map<std::string, flowAfterburnerAlgorithm> algorithms;
 
@@ -83,13 +85,16 @@ void
 MoveDescendantsToParent (HepMC::GenParticle * parent,
 			 double phishift)
 {
+  std::cout << parent << phishift << std::endl;
   // Move the branch of descendant vertices and particles by phishift
   // to parent particle position
+/*
   HepMC::GenVertex *endvtx = parent->end_vertex();
   if (endvtx)
     {
 
       // now rotate descendant vertices
+
       for (HepMC::GenVertex::vertex_iterator descvtxit = endvtx->vertices_begin(HepMC::descendants);
 	   descvtxit != endvtx->vertices_end(HepMC::descendants);
 	   ++descvtxit)
@@ -126,7 +131,7 @@ MoveDescendantsToParent (HepMC::GenParticle * parent,
 	    }
 	}
     }
-
+*/
   return;
 }
 
@@ -202,8 +207,8 @@ AddFlowToParent(HepMC::GenEvent *event, HepMC::GenParticle *parent)
   double eta = momentum.pseudoRapidity ();
   double phi_0 = momentum.phi ();
 
-  HepMC::HeavyIon *hi = event->heavy_ion();
-  double b = hi->impact_parameter();
+  HepMC::GenHeavyIonPtr hi = event->heavy_ion();
+  double b = hi->impact_parameter;
 
   v1 = 0, v2 = 0, v3 = 0, v4 = 0, v5 = 0, v6 = 0;
 
@@ -272,7 +277,7 @@ AddFlowToParent(HepMC::GenEvent *event, HepMC::GenParticle *parent)
   if (fabs (phishift) > 1e-7)
     {
       momentum.rotateZ (phishift); // DPM check units * Gaudi::Units::rad);
-      parent->set_momentum (momentum);
+//      parent->set_momentum (momentum);
     }
 
   return phishift;
@@ -286,7 +291,7 @@ flowAfterburner(HepMC::GenEvent *event,
 		float minpt, float maxpt)
 {
   algorithm = algorithms[algorithmName];
-  HepMC::HeavyIon *hi = event->heavy_ion();
+  HepMC::GenHeavyIonPtr hi = event->heavy_ion();
 
   // Generate the v_n reaction plane angles (some of them may or may
   // not be used later on).
@@ -297,14 +302,15 @@ flowAfterburner(HepMC::GenEvent *event,
     }
 
   // The psi2 plane is aligned with the impact parameter 
-  psi_n[1] = hi->event_plane_angle();
+  psi_n[1] = hi->event_plane_angle;
 
   // Ensure that Psi2 is within [-PI/2,PI/2] 
   psi_n[1] = atan2(sin(2 * psi_n[1]), cos(2 * psi_n[1])) / 2.0;
 
-  HepMC::GenVertex *mainvtx = event->barcode_to_vertex(-1);
+  HepMC::GenVertex *mainvtx = new HepMC::GenVertex(event->event_pos());
 
   // Loop over all children of this vertex
+/*
   HepMC::GenVertexParticleRange r(*mainvtx, HepMC::children);
 
   for (HepMC::GenVertex::particle_iterator it = r.begin (); it != r.end (); it++)
@@ -339,7 +345,7 @@ flowAfterburner(HepMC::GenEvent *event,
      double phishift = AddFlowToParent(event, parent);
      MoveDescendantsToParent(parent, phishift);
     }
-
+*/
   return 0;
 }
 

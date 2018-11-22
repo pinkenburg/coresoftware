@@ -3,7 +3,7 @@ AUTOMAKE_OPTIONS = foreign
 lib_LTLIBRARIES = \
   libflowafterburner.la
 
-AM_CXXFLAGS = -Werror
+#AM_CXXFLAGS = -Werror
 
 AM_LDFLAGS = \
   -L$(libdir) \
@@ -25,7 +25,7 @@ libflowafterburner_la_SOURCES = \
 
 bin_PROGRAMS = flowAfterburner 
 
-noinst_PROGRAMS = test
+#noinst_PROGRAMS = test
 
 flowAfterburner_SOURCES = \
   main.cc

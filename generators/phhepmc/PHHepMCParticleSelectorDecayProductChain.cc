@@ -7,9 +7,10 @@
 
 #include <phool/getClass.h>
 #include <phool/recoConsts.h>
-
 #include <phool/PHCompositeNode.h>
 #include <phool/PHIODataNode.h>
+
+#include <HepMC/GenVertex.h>
 
 using namespace std;
 
@@ -25,7 +26,7 @@ int PHHepMCParticleSelectorDecayProductChain::InitRun(PHCompositeNode *topNode)
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-HepMC::GenParticle*  PHHepMCParticleSelectorDecayProductChain::GetParent(HepMC::GenParticle* p, HepMC::GenEvent* event)
+HepMC::GenParticle*  PHHepMCParticleSelectorDecayProductChain::GetParent(HepMC::GenParticle* p, HepMC::GenEvent* event) const
 {
 
   HepMC::GenParticle* parent = NULL;
@@ -91,7 +92,7 @@ int PHHepMCParticleSelectorDecayProductChain::process_event(PHCompositeNode *top
 	      // do we need to check for ancestors?
 	      if(_theAncestors.size() > 0)
 		{
-		  HepMC::GenParticle* parent = GetParent(*p, event);
+		  const HepMC::GenParticle* parent = GetParent(*p, event);
 		  if(parent)
 		    {
 		      vkeep.push_back(*(*p)->production_vertex());

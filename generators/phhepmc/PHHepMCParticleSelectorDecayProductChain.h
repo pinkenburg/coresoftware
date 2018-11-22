@@ -44,7 +44,7 @@ class PHHepMCParticleSelectorDecayProductChain: public SubsysReco
  protected:
 
 /// find out if a particle comes from one of _theAncestors
-HepMC::GenParticle*  GetParent(HepMC::GenParticle* p, HepMC::GenEvent* event);
+HepMC::GenParticle*  GetParent(HepMC::GenParticle* p, HepMC::GenEvent* event) const;
 
 /// The particle you want to have in your output
   int _theParticle;

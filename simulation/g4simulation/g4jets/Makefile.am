@@ -61,8 +61,6 @@ libg4jets_io_la_SOURCES = \
 libg4jets_la_SOURCES = \
   JetReco.C \
   JetReco_Dict.C \
-  JetHepMCLoader.C \
-  JetHepMCLoader_Dict.C \
   TruthJetInput.C \
   TruthJetInput_Dict.C \
   TrackJetInput.C \

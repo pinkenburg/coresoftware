@@ -6,6 +6,8 @@
 #include <fun4all/Fun4AllInputManager.h>
 #include <fun4all/Fun4AllReturnCodes.h>
 
+#include <HepMC/GenEvent.h>
+
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -15,15 +17,13 @@
 #include <boost/iostreams/filtering_streambuf.hpp>
 #endif
 
-#ifndef __CINT__
 #include <gsl/gsl_rng.h>
-#endif
 
 // forward declaration of classes in namespace
 namespace HepMC
 {
-class IO_GenEvent;
 class GenEvent;
+class ReaderAscii;
 };
 
 class PHHepMCGenEvent;
@@ -96,7 +96,7 @@ class Fun4AllHepMCInputManager : public Fun4AllInputManager
   std::string topNodeName;
   PHCompositeNode *topNode;
 
-  HepMC::IO_GenEvent *ascii_in;
+  HepMC::ReaderAscii *ascii_in;
   HepMC::GenEvent *evt;
   HepMC::GenEvent *save_evt;
 
@@ -107,7 +107,7 @@ class Fun4AllHepMCInputManager : public Fun4AllInputManager
 
   //! helper for insert HepMC event to DST node and add vertex smearing
   PHHepMCGenHelper hepmc_helper;
-
+  HepMC::GenEvent m_genevent;
 #ifndef __CINT__
   boost::iostreams::filtering_streambuf<boost::iostreams::input> zinbuffer;
 #endif

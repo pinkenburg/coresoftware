@@ -15,6 +15,8 @@
 #include <CLHEP/Vector/LorentzVector.h>
 
 #include <HepMC/GenEvent.h>
+#include <HepMC/GenParticle.h>
+#include <HepMC/GenVertex.h>
 
 #include <gsl/gsl_randist.h>
 

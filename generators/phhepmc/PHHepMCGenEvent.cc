@@ -151,5 +151,6 @@ void PHHepMCGenEvent::print(std::ostream& out) const
 
 void PHHepMCGenEvent::PrintEvent()
 {
-  _theEvt->print();
+  cout << "needs implementing for HepMC3" << endl;
+//  _theEvt->print();
 }
