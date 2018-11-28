@@ -55,7 +55,8 @@ libphhepmc_la_SOURCES = \
   HepMCFlowAfterBurner.cc \
   HepMCFlowAfterBurner_Dict.C \
   PHHepMCGenHelper.cc \
-  PHHepMCGenHelper_Dict.C
+  PHHepMCGenHelper_Dict.C \
+  HepMC_io_Dict.C
 
 #  PHHepMCParticleSelectorDecayProductChain.cc 
 #  PHHepMCParticleSelectorDecayProductChain_Dict.C
@@ -109,14 +110,9 @@ testexternals.cc:
 %_Dict.C: %.h %LinkDef.h
 	rootcint -f $@ @CINTDEFS@ -c $(DEFAULT_INCLUDES) $(AM_CPPFLAGS) $^
 
-PHHepMC_io_Dict.C: \
-  PHGenEvent.h \
-  PHGenEventv1.h \
-  PHGenEventList.h \
-  PHGenEventListv1.h \
-  PHHepMCGenEvent.h \
-  PHHepMCGenEventMap.h \
-  $(OFFLINE_MAIN)/include/HepMC/*.h \
+HepMC_io_Dict.C: \
+  $(OFFLINE_MAIN)/include/HepMC/GenEvent.h \
+  $(OFFLINE_MAIN)/include/HepMC/GenVertex.h \
   PHHepMCLinkDef.h
 	rootcint -f $@ @CINTDEFS@ -c $(DEFAULT_INCLUDES) $(AM_CPPFLAGS) $^
 

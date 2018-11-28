@@ -21,6 +21,7 @@
 #include <HepMC/GenParticle.h>
 #include <HepMC/GenVertex.h>
 #include <HepMC/ReaderAscii.h>
+#include <HepMC/Print.h>
 
 #include <TPRegexp.h>
 #include <TString.h>
@@ -71,7 +72,6 @@ Fun4AllHepMCInputManager::Fun4AllHepMCInputManager(const string &name, const str
     PHIODataNode<PHObject> *newmapnode = new PHIODataNode<PHObject>(geneventmap, "PHHepMCGenEventMap", "PHObject");
     dstNode->addNode(newmapnode);
   }
-  m_genevent.set_units(HepMC::Units::GEV,HepMC::Units::CM);
   hepmc_helper.set_geneventmap(geneventmap);
 
   return;
@@ -199,6 +199,12 @@ int Fun4AllHepMCInputManager::run(const int nevents)
       else
       {
         ascii_in->read_event(m_genevent);
+        // change values from whatever they are  to sPHENIX convention (GeV,CM)
+	m_genevent.set_units(HepMC::Units::GEV,HepMC::Units::CM); 
+	if (! ascii_in->failed())
+	{
+	HepMC::Print::listing(m_genevent);
+	}
 //        evt = ascii_in->read_next_event();
       }
     }
@@ -207,8 +213,7 @@ int Fun4AllHepMCInputManager::run(const int nevents)
     {
       if (Verbosity() > 1)
       {
-        cout << "Fun4AllHepMCInputManager::run::" << Name()
-//             << ": error type: " << ascii_in->error_type()
+        cout << "Fun4AllHepMCInputManager::run of " << Name()
              << ", failed: " << ascii_in->failed() << endl;
       }
       fileclose();

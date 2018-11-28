@@ -18,6 +18,7 @@
 #include <HepMC/GenEvent.h>
 #include <HepMC/GenParticle.h>
 #include <HepMC/GenVertex.h>
+#include <HepMC/Print.h>
 
 #include <gsl/gsl_const.h>
 #include <gsl/gsl_randist.h>
@@ -208,17 +209,8 @@ int HepMCNodeReader::process_event(PHCompositeNode *topNode)
 
     std::list<HepMC::GenParticlePtr> finalstateparticles;
     std::list<HepMC::GenParticlePtr>::const_iterator fiter;
-    // units in G4 interface are GeV and CM as in PHENIX convention
-    // HepMC3 doesn't make this easily available (maybe in a future version)
-    // until then just use a testvector and apply the units from the event
-    // to get the conversion factors to our units
-    HepMC::FourVector test(1,1,1,1);
-    HepMC::Units::convert(test,evt->momentum_unit(),HepMC::Units::GEV);
-    const double mom_factor = 1*test.x();
-    test.setX(1);
-    HepMC::Units::convert(test,evt->length_unit(),HepMC::Units::CM);
-    const double length_factor = 1*test.x();
-    const double time_factor = length_factor / GSL_CONST_CGS_SPEED_OF_LIGHT * 1e9;
+    cout << Name() << " evt printout" << endl;
+    HepMC::Print::listing(*evt);
     for( const HepMC::GenVertexPtr &v : evt->vertices() )  
     {
       finalstateparticles.clear();
@@ -231,10 +223,10 @@ int HepMCNodeReader::process_event(PHCompositeNode *topNode)
       }
       if (!finalstateparticles.empty())
       {
-	double xpos = v->position().x() * length_factor + xshift;
-	double ypos = v->position().y() * length_factor + yshift;
-	double zpos = v->position().z() * length_factor + zshift;
-	double time = v->position().t() * time_factor + tshift;
+	double xpos = v->position().x() + xshift;
+	double ypos = v->position().y() + yshift;
+	double zpos = v->position().z() + zshift;
+	double time = (v->position().t() / GSL_CONST_CGS_SPEED_OF_LIGHT) * 1e9 + tshift;
 
 	if (Verbosity() > 1)
 	{
@@ -286,13 +278,13 @@ int HepMCNodeReader::process_event(PHCompositeNode *topNode)
 	  ++trackid;
 
 //          if (verbosity > 1) (*fiter)->print();
-
+	  HepMC::Print::line(*fiter);
 	  PHG4Particle *particle = new PHG4Particlev1();
 	  particle->set_pid((*fiter)->pdg_id());
-	  particle->set_px((*fiter)->momentum().px() * mom_factor);
-	  particle->set_py((*fiter)->momentum().py() * mom_factor);
-	  particle->set_pz((*fiter)->momentum().pz() * mom_factor);
-
+	  particle->set_px((*fiter)->momentum().px());
+	  particle->set_py((*fiter)->momentum().py());
+	  particle->set_pz((*fiter)->momentum().pz());
+	  particle->set_barcode((*fiter)->id());
 	  ineve->AddParticle(vtxindex, particle);
 
 	  if (embed_flag != 0) ineve->AddEmbeddedParticle(particle, embed_flag);
@@ -301,7 +293,6 @@ int HepMCNodeReader::process_event(PHCompositeNode *topNode)
     }
   }  // For pile-up simulation: loop end for PHHepMC event map
   if (Verbosity() > 0) ineve->identify();
-
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
