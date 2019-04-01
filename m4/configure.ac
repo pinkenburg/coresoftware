@@ -1,0 +1,6 @@
+AC_INIT([m4],[1.00])
+AC_CONFIG_SRCDIR([configure.ac])
+AM_INIT_AUTOMAKE
+
+AC_CONFIG_FILES([Makefile])
+AC_OUTPUT
