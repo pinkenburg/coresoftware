@@ -31,7 +31,7 @@ class G4EicDircSubsystem : public PHG4DetectorSubsystem
 {
  public:
   //! constructor
-  G4EicDircSubsystem(const std::string& name = "Example03");
+  G4EicDircSubsystem(const std::string& name = "G4EicDirc");
 
   //! destructor
   virtual ~G4EicDircSubsystem();
