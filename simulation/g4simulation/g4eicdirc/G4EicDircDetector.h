@@ -38,6 +38,7 @@ class G4EicDircDetector : public PHG4Detector
   const std::string SuperDetector() const { return m_SuperDetector; }
 
  protected:
+  void DefineMaterials();
   PHParameters *m_Params;
 
   G4EicDircDisplayAction *m_DisplayAction;
