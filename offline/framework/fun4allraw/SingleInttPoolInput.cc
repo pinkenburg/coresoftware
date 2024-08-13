@@ -23,6 +23,8 @@
 #include <set>
 #include <utility>  // for pair
 
+#define SKIPEARLY
+
 SingleInttPoolInput::SingleInttPoolInput(const std::string &name)
   : SingleStreamingInput(name)
 {
@@ -78,7 +80,7 @@ void SingleInttPoolInput::FillPool(const uint64_t minBCO)
       std::cout << "Fetching next Event" << evt->getEvtSequence() << std::endl;
     }
     RunNumber(evt->getRunNumber());
-    if (GetVerbosity() > 1)
+    if (GetVerbosity() > 5)
     {
       evt->identify();
     }
@@ -104,20 +106,21 @@ void SingleInttPoolInput::FillPool(const uint64_t minBCO)
     {
       exit(1);
     }
+#ifdef SKIPEARLY
     if (m_SkipEarlyEvents)
     {
       for (int i = 0; i < npackets; i++)
       {
-	int numBCOs = plist[i]->iValue(0, "NR_BCOS");
-	for (int j = 0; j < numBCOs; j++)
-	{
-	  uint64_t bco = plist[i]->lValue(j, "BCOLIST");
-	  if (bco < minBCO)
-	  {
-	    continue;
-	  }
-	  m_SkipEarlyEvents = false;
-	}
+    	int numBCOs = plist[i]->iValue(0, "NR_BCOS");
+    	for (int j = 0; j < numBCOs; j++)
+    	{
+    	  uint64_t bco = plist[i]->lValue(j, "BCOLIST");
+    	  if (bco < minBCO)
+    	  {
+    	    continue;
+    	  }
+    	  m_SkipEarlyEvents = false;
+    	}
       }
     }
     if (m_SkipEarlyEvents)
@@ -129,9 +132,10 @@ void SingleInttPoolInput::FillPool(const uint64_t minBCO)
       delete evt;
       continue;
     }
+#endif
     for (int i = 0; i < npackets; i++)
     {
-      if (Verbosity() > 2)
+      if (Verbosity() > 5)
       {
         plist[i]->identify();
       }
@@ -143,7 +147,7 @@ void SingleInttPoolInput::FillPool(const uint64_t minBCO)
           std::cout << "starting new intt pool for packet " << plist[i]->getIdentifier() << std::endl;
         }
         poolmap[plist[i]->getIdentifier()] = new intt_pool(1000, 100);
-        poolmap[plist[i]->getIdentifier()]->Verbosity(Verbosity());
+//        poolmap[plist[i]->getIdentifier()]->Verbosity(Verbosity());
         poolmap[plist[i]->getIdentifier()]->Name(std::to_string(plist[i]->getIdentifier()));
       }
       poolmap[plist[i]->getIdentifier()]->addPacket(plist[i]);
@@ -160,7 +164,7 @@ void SingleInttPoolInput::FillPool(const uint64_t minBCO)
       if (pool->depth_ok())
       {
         int num_hits = pool->iValue(0, "NR_HITS");
-        if (Verbosity() > 1)
+        if (Verbosity() > 5)
         {
           std::cout << "Number of Hits: " << num_hits << " for packet "
                     << pool->getIdentifier() << std::endl;
@@ -186,7 +190,7 @@ void SingleInttPoolInput::FillPool(const uint64_t minBCO)
         }
         if (skipthis)
         {
-          if (Verbosity() > 1)
+          if (Verbosity() > 5)
           {
             std::cout << "largest bco: 0x" << std::hex << largest_bco << ", minbco 0x" << minBCO
                       << std::dec << ", evtno: " << EventSequence << std::endl;
