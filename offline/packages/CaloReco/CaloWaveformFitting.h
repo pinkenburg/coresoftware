@@ -4,7 +4,10 @@
 #include <string>
 #include <vector>
 
+class TFile;
+class TNtuple;
 class TProfile;
+class Fun4AllHistoManager;
 
 class CaloWaveformFitting
 {
@@ -16,7 +19,7 @@ class CaloWaveformFitting
     FERMIEXP = 2,
   };
 
-  CaloWaveformFitting() = default;
+  CaloWaveformFitting();
   ~CaloWaveformFitting();
 
   void set_template_file(const std::string &template_input_file)
@@ -143,5 +146,8 @@ class CaloWaveformFitting
   double m_doubleexp_peaktime1{5.0};
   double m_doubleexp_peaktime2{5.0};
   double m_doubleexp_ratio{0.3};
+  TFile *histofile {nullptr};
+  TNtuple *ntup {nullptr};
+  Fun4AllHistoManager *histomgr {nullptr};
 };
 #endif

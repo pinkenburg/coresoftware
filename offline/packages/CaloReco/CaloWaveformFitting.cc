@@ -1,8 +1,11 @@
 #include "CaloWaveformFitting.h"
 
+#include <fun4all/Fun4AllHistoManager.h>
+
 #include <TF1.h>
 #include <TFile.h>
 #include <TH1F.h>
+#include <TNtuple.h>
 #include <TProfile.h>
 #include <TSpline.h>
 #include <TFitResult.h>
@@ -19,6 +22,7 @@
 
 #include <pthread.h>
 #include <algorithm>
+#include <format>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -29,15 +33,27 @@ double CaloWaveformFitting::template_function(double *x, double *par)
   Double_t v1 = (par[0] * h_template->Interpolate(x[0] - par[1])) + par[2];
   return v1;
 }
+CaloWaveformFitting::CaloWaveformFitting()
+{
+  histomgr = new Fun4AllHistoManager("WaveformHistos");
+}
 
 CaloWaveformFitting::~CaloWaveformFitting()
 {
+  histomgr->dumpHistos("WaveformHistos.root");
+  delete histomgr;
+  histofile->cd();
+  ntup->Write();
+  histofile->Close();
   delete h_template;
 }
 
 void CaloWaveformFitting::initialize_processing(const std::string &templatefile)
 {
   TFile *fin = TFile::Open(templatefile.c_str());
+  ntup = new TNtuple("ntup","waveform results","energy:time:ped:chi2:status:cnt:first");
+  histomgr->registerHisto(ntup);
+  histofile = new TFile("fithistos.root","RECREATE");
   assert(fin);
   assert(fin->IsOpen());
   h_template = dynamic_cast<TProfile *>(fin->Get("waveform_template"));
@@ -136,6 +152,7 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
           }
 
           h->SetBinContent(i + 1, v.at(i));
+//          h->SetBinError(i + 1, std::max(5.,(v.at(i) - pedestal) * 0.005)); // 20% error
           h->SetBinError(i + 1, 1);
           ndata++;
         }
@@ -146,11 +163,12 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
           for (int i = 0; i < size1; ++i)
           {
             h->SetBinContent(i + 1, v.at(i));
-            h->SetBinError(i + 1, 1);
+//            h->SetBinError(i + 1, std::max(5.,(v.at(i) - pedestal) * 0.005));
+          h->SetBinError(i + 1, 1);
           }
         }
 
-        auto *f = new TF1(std::string("f_" + std::to_string((int) round(v.at(size1)))).c_str(), this, &CaloWaveformFitting::template_function, 0, 31, 3, "CaloWaveformFitting", "template_function");
+        auto *f = new TF1(std::string("f_" + std::to_string((int) round(v.at(size1)))).c_str(), this, &CaloWaveformFitting::template_function, 0, 12, 3, "CaloWaveformFitting", "template_function");
         ROOT::Math::WrappedMultiTF1 *fitFunction = new ROOT::Math::WrappedMultiTF1(*f, 3);
         ROOT::Fit::BinData data(v.size() - 1, 1);
         ROOT::Fit::FillData(data, h);
@@ -170,20 +188,43 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
         ROOT::Fit::FitResult fitres = fitter->Result();
         // get the fit status code (0 means successful fit)
         int validfit = fitres.Status();
-        /*
-        if(validfit != 0)
-        {
-          std::cout<<"invalid fit status in waveform fitting: " << validfit <<std::endl;
-          for (int i = 0; i < size1; ++i)
-        {
-          std::cout<<v.at(i) << " ";
-        }
-        std::cout<<std::endl;
-        }
-        */
         double chi2min = fitres.MinFcnValue();
         // chi2min /= size1 - 3;  // divide by the number of dof
         chi2min /= ndata - 3;  // divide by the number of dof
+//        if(validfit != 0)
+        {
+	  static int icnt = -1;
+	  icnt++;
+	  if (validfit != 0)
+	  {
+	    std::cout << "fit # " << icnt << " has status validfit " << validfit << std::endl;
+	  }
+	    std::string hname = "firstfit_" + std::format("{:06}",icnt);
+	    if (validfit != 0)
+	    {
+	      hname = "firstfit_" + std::format("{:06}_status_{:03}",icnt,validfit);
+	    }
+	  TH1 *tmphist = (TH1F *) h->Clone();
+	  tmphist->SetName(hname.c_str());
+	  //tmphist->SetOptFit(1);
+	  histomgr->registerHisto(tmphist);
+          // std::cout<<"invalid fit status in waveform fitting in 1st instance: " << validfit <<std::endl;
+          // for (int i = 0; i < size1; ++i)
+	  // {
+	  //   std::cout<<v.at(i) << " ";
+	  // }
+	  // std::cout<<std::endl;
+          TF1 *tempf = (TF1 *) f->Clone();
+	  tempf->SetParameters(fitres.Parameters().data());
+	  tempf->SetChisquare(fitres.Chi2());
+	  tempf->SetNDF(fitres.Ndf());
+
+	  tmphist->GetListOfFunctions()->Add(tempf);
+	  // std::cout << "writing " << h->GetName() << std::endl;
+	  //h->Write();
+	  ntup->Fill(f->GetParameter(0),f->GetParameter(1),f->GetParameter(2),chi2min,validfit,icnt,1);
+	//   ntup->Write();
+	  }
         if (chi2min > _chi2threshold && (f->GetParameter(2) < _bfr_highpedestalthreshold || pedestal < _bfr_highpedestalthreshold) && (f->GetParameter(2) > _bfr_lowpedestalthreshold || pedestal > _bfr_lowpedestalthreshold) && _dobitfliprecovery)
         {
           std::vector<float> rv;  // temporary recovered waveform
@@ -202,11 +243,6 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
                 rv.at(i) = rv.at(i) - bit;
               }
             }
-          }
-          for (int i = 0; i < size1; i++)
-          {
-            h->SetBinContent(i + 1, rv.at(i));
-            h->SetBinError(i + 1, 1);
           }
 
           maxheight = 0;
@@ -231,8 +267,14 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
           {
             pedestal = 0.5 * (rv.at(size1 - 3) + rv.at(size1 - 2));
           }
+          for (int i = 0; i < size1; i++)
+          {
+            h->SetBinContent(i + 1, rv.at(i));
+//            h->SetBinError(i + 1, std::max(5.,(v.at(i) - pedestal) * 0.2));
+          h->SetBinError(i + 1, 1);
+          }
 
-          auto *recover_f = new TF1(std::string("recover_f_" + std::to_string((int) round(v.at(size1)))).c_str(), this, &CaloWaveformFitting::template_function, 0, 31, 3, "CaloWaveformFitting", "template_function");
+          auto *recover_f = new TF1(std::string("recover_f_" + std::to_string((int) round(v.at(size1)))).c_str(), this, &CaloWaveformFitting::template_function, 0, 12, 3, "CaloWaveformFitting", "template_function");
           ROOT::Math::WrappedMultiTF1 *recoverFitFunction = new ROOT::Math::WrappedMultiTF1(*recover_f, 3);
           ROOT::Fit::BinData recoverData(rv.size() - 1, 1);
           ROOT::Fit::FillData(recoverData, h);
@@ -245,8 +287,30 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
           recoverFitter->FitFCN(*recoverEPChi2, nullptr, recoverData.Size(), true);
           ROOT::Fit::FitResult recover_fitres = recoverFitter->Result();
           int recover_validfit = recover_fitres.Status();
-          double recover_chi2min = recover_fitres.MinFcnValue();
+           double recover_chi2min = recover_fitres.MinFcnValue();
           recover_chi2min /= size1 - 3;  // divide by the number of dof
+        if(recover_validfit != 0)
+        {
+	  static int icnt1 = 0;
+	  std::string hname = "secondfit_" + std::format("{:04}",icnt1);
+	  TH1F *tmphist = (TH1F *) h->Clone();
+	  tmphist->SetName(hname.c_str());
+	  icnt1++;
+          std::cout<<"invalid fit status in waveform fitting in refit instance: " << recover_validfit <<std::endl;
+          for (int i = 0; i < size1; ++i)
+	  {
+	    std::cout<<v.at(i) << " ";
+	  }
+	  std::cout<<std::endl;
+	  histofile->cd();
+          TF1 *tempf = (TF1 *) recover_f->Clone();
+	  tmphist->GetListOfFunctions()->Add(tempf);
+	  tmphist->Write();
+	  std::cout << "worte " << tmphist->GetName() << std::endl;
+	  ntup->Fill(recover_f->GetParameter(0),recover_f->GetParameter(1),recover_f->GetParameter(2),recover_chi2min,recover_validfit,icnt1,2);
+//	  ntup->Write();
+
+        }
           if (recover_chi2min < _chi2lowthreshold && recover_f->GetParameter(2) < _bfr_highpedestalthreshold && recover_f->GetParameter(2) > _bfr_lowpedestalthreshold)
           {
             for (int i = 0; i < size1; i++)
