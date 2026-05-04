@@ -43,7 +43,6 @@ CaloWaveformFitting::~CaloWaveformFitting()
   histomgr->dumpHistos("WaveformHistos.root");
   delete histomgr;
   histofile->cd();
-  ntup->Write();
   histofile->Close();
   delete h_template;
 }
@@ -152,8 +151,11 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
           }
 
           h->SetBinContent(i + 1, v.at(i));
-//          h->SetBinError(i + 1, std::max(5.,(v.at(i) - pedestal) * 0.005)); // 20% error
-          h->SetBinError(i + 1, 1);
+            h->SetBinError(i + 1, std::max(0.5,(v.at(i) - pedestal) * 0.1));
+	    if (i<=1)
+	     {
+                h->SetBinError(i + 1, 1);
+	     }
           ndata++;
         }
         // if too many are saturated don't do the saturation recovery need enough ndf
@@ -163,8 +165,11 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
           for (int i = 0; i < size1; ++i)
           {
             h->SetBinContent(i + 1, v.at(i));
-//            h->SetBinError(i + 1, std::max(5.,(v.at(i) - pedestal) * 0.005));
-          h->SetBinError(i + 1, 1);
+            h->SetBinError(i + 1, std::max(0.5,(v.at(i) - pedestal) * 0.1));
+	     if (i<=1)
+	     {
+                h->SetBinError(i + 1, 1);
+	     }
           }
         }
 
@@ -197,12 +202,20 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
 	  icnt++;
 	  if (validfit != 0)
 	  {
+	  static int ibad = 0;
+	  ibad++;
 	    std::cout << "fit # " << icnt << " has status validfit " << validfit << std::endl;
+	    std::cout << "bad fits: " << ibad << std::endl;
 	  }
 	    std::string hname = "firstfit_" + std::format("{:06}",icnt);
 	    if (validfit != 0)
 	    {
-	      hname = "firstfit_" + std::format("{:06}_status_{:03}",icnt,validfit);
+	      int label = validfit;
+	      if (label < 0)
+	      {
+		label = std::abs(label)+100;
+	      }
+	      hname = "firstfit_" + std::format("{:06}_status_{:03}",icnt,label);
 	    }
 	  TH1 *tmphist = (TH1F *) h->Clone();
 	  tmphist->SetName(hname.c_str());
@@ -289,7 +302,8 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
           int recover_validfit = recover_fitres.Status();
            double recover_chi2min = recover_fitres.MinFcnValue();
           recover_chi2min /= size1 - 3;  // divide by the number of dof
-        if(recover_validfit != 0)
+/*
+	  if(recover_validfit != 0)
         {
 	  static int icnt1 = 0;
 	  std::string hname = "secondfit_" + std::format("{:04}",icnt1);
@@ -311,6 +325,7 @@ std::vector<std::vector<float>> CaloWaveformFitting::calo_processing_templatefit
 //	  ntup->Write();
 
         }
+*/
           if (recover_chi2min < _chi2lowthreshold && recover_f->GetParameter(2) < _bfr_highpedestalthreshold && recover_f->GetParameter(2) > _bfr_lowpedestalthreshold)
           {
             for (int i = 0; i < size1; i++)
