@@ -109,6 +109,7 @@ class CaloWaveformFitting
   static float stablepsinc(float t, std::vector<float> &vec_signal_samples);
 
   static float psinc(float t, std::vector<float> &vec_signal_samples);
+  static double calculate_stddev(const std::vector<float>& v);
   double template_function(double *x, double *par);
 
   TProfile *h_template{nullptr};
