@@ -18,7 +18,6 @@
 #include <tpc/TpcClusterZCrossingCorrection.h>
 #include <tpc/TpcGlobalPositionWrapper.h>
 
-#include <g4detectors/PHG4TpcGeomContainer.h>
 
 #include <Acts/EventData/ParticleHypothesis.hpp>
 #include <Acts/EventData/SourceLink.hpp>
@@ -50,12 +49,13 @@ namespace
 
 }  // namespace
 
-void MakeSourceLinks::initialize(PHG4TpcGeomContainer* cellgeo)
+void MakeSourceLinks::initialize(ActsGeometry *tGeometry, PHCompositeNode *topNode)
 {
   // get the TPC layer radii from the geometry object
-  if (cellgeo)
+  if (tGeometry && topNode)
   {
-    _clusterMover.initialize_geometry(cellgeo);
+    _clusterMover.initialize_geometry(tGeometry, topNode);
+    _clusterMover.set_verbosity(m_verbosity);
   }
 }
 
@@ -275,7 +275,7 @@ SourceLinkVec MakeSourceLinks::getSourceLinks(
         std::cout << std::endl;
         std::cout << "Corrected surface transform:" << std::endl;
         std::cout << transformMapTransient->getTransform(surf->geometryId()).matrix() << std::endl;
-        std::cout << "Cluster error " << cluster->getRPhiError() << " , " << cluster->getZError() << std::endl;
+        std::cout << "Cluster error " << std::sqrt(para_errors.first) << " , " << std::sqrt(para_errors.second) << std::endl;
         std::cout << "For key " << cluskey << " with local pos " << std::endl
                   << localPos(0) << ", " << localPos(1)
                   << std::endl
@@ -326,7 +326,8 @@ SourceLinkVec MakeSourceLinks::getSourceLinksClusterMover(
     TrkrClusterContainer* clusterContainer,
     ActsGeometry* tGeometry,
     const TpcGlobalPositionWrapper& globalPositionWrapper,
-    short int crossing)
+    short int crossing,
+    bool use_modified_clus_error)
 {
   if (m_verbosity > 1)
   {
@@ -360,6 +361,7 @@ SourceLinkVec MakeSourceLinks::getSourceLinksClusterMover(
        ++clusIter)
   {
     auto key = *clusIter;
+
     auto* cluster = clusterContainer->findCluster(key);
     if (!cluster)
     {
@@ -382,17 +384,11 @@ SourceLinkVec MakeSourceLinks::getSourceLinksClusterMover(
       continue;
     }
 
-    const unsigned int trkrid = TrkrDefs::getTrkrId(key);
-
-    if (m_verbosity > 1)
-    {
-      std::cout << "    Cluster key " << key << " trkrid " << trkrid << " crossing " << crossing << std::endl;
-    }
-
     // For the TPC, cluster z has to be corrected for the crossing z offset, distortion, and TOF z offset
     // we do this locally here and do not modify the cluster, since the cluster may be associated with multiple silicon tracks
     const Acts::Vector3 global = globalPositionWrapper.getGlobalPositionDistortionCorrected(key, cluster, crossing);
 
+    const unsigned int trkrid = TrkrDefs::getTrkrId(key);
     if (trkrid == TrkrDefs::tpcId)
     {
       if (m_verbosity > 2)
@@ -425,18 +421,12 @@ SourceLinkVec MakeSourceLinks::getSourceLinksClusterMover(
   }  // end loop over clusters here
 
   // move the cluster positions back to the original readout surface
-  auto global_moved = _clusterMover.processTrack(global_raw);
+  // the cluster mover now returns global_moved in a new format
+  std::vector<std::pair<TrkrDefs::cluskey, std::pair<Surface, Acts::Vector3>>> global_moved = _clusterMover.processTrack(global_raw);
 
-  if (m_verbosity > 1)
+    // loop over global positions returned by cluster mover
+  for (auto&& [cluskey, surf_global] : global_moved)
   {
-    std::cout << "Cluster global positions after mover puts them on readout surface:" << std::endl;
-  }
-
-  // loop over global positions returned by cluster mover
-  for (auto&& [cluskey, global] : global_moved)
-  {
-    // std::cout << "Global moved: " << global.x() << "  " <<  global.y() << "  " << global.z() << std::endl;
-
     if (m_ignoreLayer.contains(TrkrDefs::getLayer(cluskey)))
     {
       if (m_verbosity > 3)
@@ -447,18 +437,28 @@ SourceLinkVec MakeSourceLinks::getSourceLinksClusterMover(
       continue;
     }
 
-    auto* cluster = clusterContainer->findCluster(cluskey);
-    Surface surf = tGeometry->maps().getSurface(cluskey, cluster);
+    Acts::Vector3 global = surf_global.second;
+    
     if (std::isnan(global.x()) || std::isnan(global.y()))
     {
-      std::cout << "MakeSourceLinks::getSourceLinksClusterMover - invalid position"
-                << " key: " << cluskey
-                << " layer: " << (int) TrkrDefs::getLayer(cluskey)
-                << " position: " << global
-                << std::endl;
+      if (m_verbosity > 1)
+      {
+        std::cout << "MakeSourceLinks::getSourceLinksClusterMover - invalid position"
+          << " key: " << cluskey
+          << " layer: " << (int) TrkrDefs::getLayer(cluskey)
+          << " position: " << global
+          << std::endl;
+        }
+        continue;
     }
 
-    // if this is a TPC cluster, the crossing correction may have moved it across the central membrane, check the surface
+    Surface surf = surf_global.first;
+    
+    // now we have the surface and the global position on the surface
+    // we also need the clusterkey
+
+    auto* cluster = clusterContainer->findCluster(cluskey);
+	  
     auto trkrid = TrkrDefs::getTrkrId(cluskey);
     if (trkrid == TrkrDefs::tpcId)
     {
@@ -466,18 +466,11 @@ SourceLinkVec MakeSourceLinks::getSourceLinksClusterMover(
       {
         continue;
       }
-
-      TrkrDefs::hitsetkey hitsetkey = TrkrDefs::getHitSetKeyFromClusKey(cluskey);
-      TrkrDefs::subsurfkey new_subsurfkey = 0;
-      surf = tGeometry->get_tpc_surface_from_coords(hitsetkey, global, new_subsurfkey);
     }
 
     if (!surf)
     {
-      if (m_verbosity > 2)
-      {
-        std::cout << "MakeSourceLinks::getSourceLinksClusterMover -  Failed to find surface for cluskey " << cluskey << std::endl;
-      }
+      std::cout << "MakeSourceLinks::getSourceLinksClusterMover -  Failed to find surface for cluskey " << cluskey << std::endl;
       continue;
     }
 
@@ -531,13 +524,23 @@ SourceLinkVec MakeSourceLinks::getSourceLinksClusterMover(
         {Acts::BoundIndices::eBoundLoc0, Acts::BoundIndices::eBoundLoc1};
 
     Acts::ActsSquareMatrix<2> cov = Acts::ActsSquareMatrix<2>::Zero();
-
     double clusRadius = sqrt(global[0] * global[0] + global[1] * global[1]);
     auto para_errors = ClusterErrorPara::get_clusterv5_modified_error(cluster, clusRadius, cluskey);
-    cov(Acts::eBoundLoc0, Acts::eBoundLoc0) = para_errors.first * Acts::UnitConstants::cm2;
-    cov(Acts::eBoundLoc0, Acts::eBoundLoc1) = 0;
-    cov(Acts::eBoundLoc1, Acts::eBoundLoc0) = 0;
-    cov(Acts::eBoundLoc1, Acts::eBoundLoc1) = para_errors.second * Acts::UnitConstants::cm2;
+
+    if(use_modified_clus_error)
+    {
+      cov(Acts::eBoundLoc0, Acts::eBoundLoc0) = para_errors.first * Acts::UnitConstants::cm2;
+      cov(Acts::eBoundLoc0, Acts::eBoundLoc1) = 0;
+      cov(Acts::eBoundLoc1, Acts::eBoundLoc0) = 0;
+      cov(Acts::eBoundLoc1, Acts::eBoundLoc1) = para_errors.second * Acts::UnitConstants::cm2;
+    }
+    else
+    {
+      cov(Acts::eBoundLoc0, Acts::eBoundLoc0) = cluster->getRPhiError()*cluster->getRPhiError() * Acts::UnitConstants::cm2;
+      cov(Acts::eBoundLoc0, Acts::eBoundLoc1) = 0;
+      cov(Acts::eBoundLoc1, Acts::eBoundLoc0) = 0;
+      cov(Acts::eBoundLoc1, Acts::eBoundLoc1) = cluster->getZError()*cluster->getZError() * Acts::UnitConstants::cm2;
+    }
 
     ActsSourceLink::Index index = measurements.size();
 
@@ -553,7 +556,7 @@ SourceLinkVec MakeSourceLinks::getSourceLinksClusterMover(
       std::cout << "Surface : " << std::endl;
       surf.get()->toStream(tGeometry->geometry().getGeoContext());
       std::cout << std::endl;
-      std::cout << "Cluster error " << cluster->getRPhiError() << " , " << cluster->getZError() << std::endl;
+      std::cout << "Cluster error " << std::sqrt(para_errors.first) << " , " << std::sqrt(para_errors.second) << std::endl;
       std::cout << "For key " << cluskey << " with local pos " << std::endl
                 << localPos(0) << ", " << localPos(1)
                 << std::endl;
@@ -561,7 +564,8 @@ SourceLinkVec MakeSourceLinks::getSourceLinksClusterMover(
 
     sourcelinks.push_back(actsSL);
   }
-
+  
+  // all done
   SLTrackTimer.stop();
   auto SLTime = SLTrackTimer.get_accumulated_time();
 

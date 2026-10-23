@@ -146,6 +146,15 @@ int MbdCalib::Download_All()
       }
       Download_Gains(_cdb_urls["MBD_QFIT"]);
 
+      /*
+      _cdb_urls["MBD_TTGAIN"] = _cdb->getUrl("MBD_TTGAIN");
+      if ( Verbosity() > 0 )
+      {
+        std::cout << "MBD_TTGAIN url " << _cdb_urls["MBD_TTGAIN"] << std::endl;
+      }
+      Download_TTGain(_cdb_urls["MBD_TTGAIN"]);
+      */
+
       _cdb_urls["MBD_TT_T0"] = _cdb->getUrl("MBD_TT_T0");
       if ( Verbosity() > 0 )
       {
@@ -219,6 +228,11 @@ int MbdCalib::Download_All()
 
     std::string qfit_file = bbc_caldir + "/mbd_qfit.calib";
     Download_Gains(qfit_file);
+
+    /*
+    std::string ttgain_file = bbc_caldir + "/mbd_ttgain.calib";
+    Download_TTGain(ttgain_file);
+    */
 
     std::string tq_t0_file = bbc_caldir + "/mbd_tq_t0.calib";
     Download_TQT0(tq_t0_file);
@@ -391,6 +405,82 @@ int MbdCalib::Download_TQT0(const std::string& dbase_location)
   }
 
   if ( std::isnan(_tqfit_t0mean[0]) )
+  {
+    std::cout << PHWHERE << ", ERROR, unknown file type, " << dbase_location << std::endl;
+    _status = -1;
+    return _status;
+  }
+
+  return 1;
+}
+
+int MbdCalib::Download_TTGain(const std::string& dbase_location)
+{
+  // Reset All Values
+  _ttgain_mean.fill(std::numeric_limits<float>::quiet_NaN());
+  _ttgain_meanerr.fill(std::numeric_limits<float>::quiet_NaN());
+  _ttgain_sigma.fill(std::numeric_limits<float>::quiet_NaN());
+  _ttgain_sigmaerr.fill(std::numeric_limits<float>::quiet_NaN());
+
+  if (Verbosity() > 0)
+  {
+    std::cout << "Opening " << dbase_location << std::endl;
+  }
+  TString dbase_file = dbase_location;
+
+#ifndef ONLINE
+  if (dbase_file.EndsWith(".root"))  // read from database
+  {
+    CDBTTree* cdbttree = new CDBTTree(dbase_location);
+    cdbttree->LoadCalibrations();
+
+    for (int ipmt = 0; ipmt < MbdDefs::MBD_N_PMT; ipmt++)
+    {
+      _ttgain_mean[ipmt] = cdbttree->GetFloatValue(ipmt, "ttgain_mean");
+      _ttgain_meanerr[ipmt] = cdbttree->GetFloatValue(ipmt, "ttgain_meanerr");
+      _ttgain_sigma[ipmt] = cdbttree->GetFloatValue(ipmt, "ttgain_sigma");
+      _ttgain_sigmaerr[ipmt] = cdbttree->GetFloatValue(ipmt, "ttgain_sigmaerr");
+
+      if (Verbosity() > 0)
+      {
+        if (ipmt < 5 || ipmt >= MbdDefs::MBD_N_PMT - 5)
+        {
+          std::cout << ipmt << "\t" << _ttgain_mean[ipmt] << std::endl;
+        }
+      }
+    }
+    delete cdbttree;
+  }
+#endif
+
+  if (dbase_file.EndsWith(".calib"))  // read from text file
+  {
+    std::ifstream infile(dbase_location);
+    if (!infile.is_open())
+    {
+      std::cout << PHWHERE << "unable to open " << dbase_location << std::endl;
+      _status = -3;
+      return _status;
+    }
+
+    int pmt = -1;
+    while (infile >> pmt)
+    {
+      infile >> _ttgain_mean[pmt] >> _ttgain_meanerr[pmt] >> _ttgain_sigma[pmt] >> _ttgain_sigmaerr[pmt];
+
+      if (Verbosity() > 0)
+      {
+        if (pmt < 5 || pmt >= MbdDefs::MBD_N_PMT - 5)
+        {
+          std::cout << pmt << "\t" << _ttgain_mean[pmt] << "\t" << _ttgain_meanerr[pmt]
+                    << "\t" << _ttgain_sigma[pmt] << "\t" << _ttgain_sigmaerr[pmt] << std::endl;
+        }
+      }
+    }
+    infile.close();
+  }
+
+  if ( std::isnan(_ttgain_mean[0]) )
   {
     std::cout << PHWHERE << ", ERROR, unknown file type, " << dbase_location << std::endl;
     _status = -1;
@@ -973,6 +1063,19 @@ int MbdCalib::Download_Shapes(const std::string& dbase_location)
   return 1;
 }
 
+void MbdCalib::get_tcorr_range(const int ifeech, int& min, int& max, int& step)
+{
+    min = static_cast<int>( _tcorr_minrange[ifeech] );
+    max = static_cast<int>( _tcorr_maxrange[ifeech] );
+    if ( _tcorr_npts[ifeech] > 1 )
+    {
+      step = (_tcorr_maxrange[ifeech] - _tcorr_minrange[ifeech]) / (_tcorr_npts[ifeech]-1);
+    }
+    else
+    {
+      step = 0;
+    }
+}
 
 int MbdCalib::Download_TimeCorr(const std::string& dbase_location)
 {
@@ -1730,6 +1833,56 @@ int MbdCalib::Write_Status(const std::string& dbfile)
 }
 
 #ifndef ONLINE
+int MbdCalib::Write_CDB_TTGain(const std::string& dbfile)
+{
+  CDBTTree* cdbttree{ nullptr };
+
+  std::cout << "Creating " << dbfile << std::endl;
+  cdbttree = new CDBTTree( dbfile );
+  cdbttree->SetSingleIntValue("version", 1);
+  cdbttree->CommitSingle();
+
+  std::cout << "TTGAIN" << std::endl;
+  for (size_t ipmt = 0; ipmt < MbdDefs::MBD_N_PMT; ipmt++)
+  {
+    // store in a CDBTree
+    cdbttree->SetFloatValue(ipmt, "ttgain_mean", _ttgain_mean[ipmt]);
+    cdbttree->SetFloatValue(ipmt, "ttgain_meanerr", _ttgain_meanerr[ipmt]);
+    cdbttree->SetFloatValue(ipmt, "ttgain_sigma", _ttgain_sigma[ipmt]);
+    cdbttree->SetFloatValue(ipmt, "ttgain_sigmaerr", _ttgain_sigmaerr[ipmt]);
+
+    if (ipmt < 5 || ipmt >= MbdDefs::MBD_N_PMT - 5)
+    {
+      std::cout << ipmt << "\t" << cdbttree->GetFloatValue(ipmt, "ttgain_mean") << std::endl;
+    }
+  }
+
+  cdbttree->Commit();
+  // cdbttree->Print();
+
+  // for now we create the tree after reading it
+  cdbttree->WriteCDBTTree();
+  delete cdbttree;
+
+  return 1;
+}
+#endif
+
+int MbdCalib::Write_TTGain(const std::string& dbfile)
+{
+  std::ofstream cal_ttgain_file;
+  cal_ttgain_file.open(dbfile);
+  for (int ipmt = 0; ipmt < MbdDefs::MBD_N_PMT; ipmt++)
+  {
+    cal_ttgain_file << ipmt << "\t" << _ttgain_mean[ipmt] << "\t" << _ttgain_meanerr[ipmt]
+      << "\t" << _ttgain_sigma[ipmt] << "\t" << _ttgain_sigmaerr[ipmt] << std::endl;
+  }
+  cal_ttgain_file.close();
+
+  return 1;
+}
+
+#ifndef ONLINE
 int MbdCalib::Write_CDB_TTT0(const std::string& dbfile)
 {
   CDBTTree* cdbttree{ nullptr };
@@ -2426,9 +2579,121 @@ int MbdCalib::Write_Thresholds(const std::string& dbfile)
 #ifndef ONLINE
 int MbdCalib::Write_CDB_All()
 {
-  return 1;
+  int status = 1;
+
+  if ( Write_CDB_Shapes("mbd_shape.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_TimeCorr("mbd_timecorr.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_SlewCorr("mbd_slewcorr.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_Pileup("mbd_pileup.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_SampMax("mbd_sampmax.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_Ped("mbd_ped.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_Status("mbd_status.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_TTGain("mbd_ttgain.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_TTT0("mbd_tt_t0.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_TQT0("mbd_tq_t0.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_T0Corr("mbd_t0corr.root") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_CDB_Gains("mbd_qfit.root") != 1 )
+  {
+    status = 0;
+  }
+  //Write_CDB_TimeRMS("mbd_trms.root");
+  //Write_CDB_Thresholds("mbd_thresh.root");
+
+  return status;
 }
 #endif
+
+int MbdCalib::Write_All()
+{
+  int status = 1;
+  /*
+  if ( Write_Shapes("mbd_shape.calib") != 1 )
+  {
+    status = 0;
+  }
+  */
+  if ( Write_TimeCorr("mbd_timecorr.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_SlewCorr("mbd_slewcorr.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_Pileup("mbd_pileup.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_SampMax("mbd_sampmax.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_Ped("mbd_ped.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_Status("mbd_status.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_TTGain("mbd_ttgain.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_TTT0("mbd_tt_t0.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_TQT0("mbd_tq_t0.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_T0Corr("mbd_t0corr.calib") != 1 )
+  {
+    status = 0;
+  }
+  if ( Write_Gains("mbd_qfit.calib") != 1 )
+  {
+    status = 0;
+  }
+  //Write_TimeRMS("mbd_trms.calib");
+  //Write_Thresholds("mbd_thresh.calib");
+
+  return status;
+}
 
 // dz is what we need to move the MBD z by
 // dt is what we change the MBD t0 by
@@ -2472,6 +2737,14 @@ void MbdCalib::Update_TTT0(const float dz, const float dt)
     // update t0
     _ttfit_t0mean[ipmt] -= dt;
   }
+}
+
+void MbdCalib::Reset_TTGain()
+{
+  _ttgain_mean.fill( 0.95 );
+  _ttgain_meanerr.fill(std::numeric_limits<float>::quiet_NaN());
+  _ttgain_sigma.fill(std::numeric_limits<float>::quiet_NaN());
+  _ttgain_sigmaerr.fill(std::numeric_limits<float>::quiet_NaN());
 }
 
 void MbdCalib::Reset_TTT0()
@@ -2561,6 +2834,7 @@ void MbdCalib::Save_CDB_URL()
 
 void MbdCalib::Reset()
 {
+  Reset_TTGain();
   Reset_TTT0();
   Reset_TQT0();
   Reset_Ped();

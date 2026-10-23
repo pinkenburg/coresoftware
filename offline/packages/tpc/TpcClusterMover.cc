@@ -7,13 +7,25 @@
 #include "TpcClusterMover.h"
 
 #include <fun4all/Fun4AllReturnCodes.h>
+#include <trackbase/TpcDefs.h>
 #include <trackbase/TrackFitUtils.h>
+#include <trackbase/TrkrCluster.h>
+#include <trackbase/TrkrClusterContainer.h>
 
 #include <g4detectors/PHG4TpcGeom.h>
-#include <g4detectors/PHG4TpcGeomContainer.h>
+
+#include <phool/PHCompositeNode.h>
+#include <phool/PHDataNode.h>
+#include <phool/PHNode.h>
+#include <phool/PHNodeIterator.h>
+#include <phool/PHObject.h>
+#include <phool/getClass.h>
+#include <phool/phool.h>
+
 #include <climits>
 #include <cmath>
 #include <iostream>
+#include <stdexcept>
 
 namespace
 {
@@ -24,68 +36,85 @@ namespace
   }
 }  // namespace
 
-TpcClusterMover::TpcClusterMover()
-  : inner_tpc_spacing((mid_tpc_min_radius - inner_tpc_min_radius) / 16.0)
-  , mid_tpc_spacing((outer_tpc_min_radius - mid_tpc_min_radius) / 16.0)
-  , outer_tpc_spacing((outer_tpc_max_radius - outer_tpc_min_radius) / 16.0)
+void TpcClusterMover::initialize_geometry(ActsGeometry* tGeometry, PHCompositeNode* topNode)
 {
-  // initialize layer radii
 
-  for (int i = 0; i < 16; ++i)
+  if (!tGeometry)
   {
-    layer_radius[i] = inner_tpc_min_radius + (double) i * inner_tpc_spacing + 0.5 * inner_tpc_spacing;
-  }
-  for (int i = 0; i < 16; ++i)
-  {
-    layer_radius[i + 16] = mid_tpc_min_radius + (double) i * mid_tpc_spacing + 0.5 * mid_tpc_spacing;
-  }
-  for (int i = 0; i < 16; ++i)
-  {
-    layer_radius[i + 32] = outer_tpc_min_radius + (double) i * outer_tpc_spacing + 0.5 * outer_tpc_spacing;
-  }
-}
-
-void TpcClusterMover::initialize_geometry(PHG4TpcGeomContainer* cellgeo)
-{
-  if (_verbosity > 0)
-  {
-    std::cout << "TpcClusterMover: Initializing layer radii for Tpc from cell geometry object" << std::endl;
+    std::cout << PHWHERE << " Failed to get ActsGeometry cannot continue - quit!" << std::endl;
+    exit(1);
   }
 
-  int layer = 0;
-  PHG4TpcGeomContainer::ConstRange layerrange = cellgeo->get_begin_end();
-  for (PHG4TpcGeomContainer::ConstIterator layeriter = layerrange.first;
-       layeriter != layerrange.second;
-       ++layeriter)
-  {
-    layer_radius[layer] = layeriter->second->get_radius();
-    layer++;
-  }
+  _topNode = topNode;
+  _tGeometry = tGeometry;
 }
 
 //____________________________________________________________________________..
-std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>> TpcClusterMover::processTrack(const std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>>& global_in)
+std::vector<std::pair<TrkrDefs::cluskey, std::pair<Surface, Acts::Vector3>>> TpcClusterMover::processTrack(const std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>>& global_in) const
 {
-  // Get the global positions of the TPC clusters for this track, already corrected for distortions, and move them to the surfaces
-  // The input object contains all clusters for the track
+  // Preserve node lookup for callers using the original interface.
+  auto* cluster_map = findNode::getClass<TrkrClusterContainer>(_topNode, "TRKR_CLUSTER_SEED");
+  if (!cluster_map)
+  {
+    cluster_map = findNode::getClass<TrkrClusterContainer>(_topNode, "TRKR_CLUSTER");
+    if (!cluster_map)
+    {
+      std::cout << PHWHERE << " Did not find TRKR_CLUSTER_SEED or TRKR_CLUSTER nodes, quit." << std::endl;
+      exit(1);
+    }
+  }
 
-  std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>> global_moved;
+  return processTrack(global_in, cluster_map);
+}
+
+//____________________________________________________________________________..
+std::vector<std::pair<TrkrDefs::cluskey, std::pair<Surface, Acts::Vector3>>>
+TpcClusterMover::processTrack(
+    const std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>>& global_in,
+    TrkrClusterContainer* cluster_map) const
+{
+  if (!cluster_map || !_tGeometry)
+  {
+    throw std::runtime_error(
+        "TpcClusterMover::processTrack - missing cluster container or geometry");
+  }
+
+  // Get the global positions of the TPC clusters for this track, already corrected for distortions, and move them to the surfaces
+  // The input object contains all clusters for the track in world coordinates
+  // The surface radii are in global coordinates. Needed because we are dealing with aligned surfaces
+
+  const auto& surfMaps = _tGeometry->maps();
+
+  std::vector<std::pair<TrkrDefs::cluskey, std::pair<Surface, Acts::Vector3>>> global_moved;
 
   std::vector<Acts::Vector3> tpc_global_vec;
+  std::vector<Surface> tpc_surface_vec;
   std::vector<TrkrDefs::cluskey> tpc_cluskey_vec;
 
   for (const auto& [ckey, global] : global_in)
   {
+    auto* cluster = cluster_map->findCluster(ckey);
+    if (!cluster)
+    {
+      continue;
+    }
+    auto surface = surfMaps.getSurface(ckey, cluster);
+    if (!surface)
+    {
+      continue;
+    }
+    
     const auto trkrid = TrkrDefs::getTrkrId(ckey);
     if (trkrid == TrkrDefs::tpcId)
     {
       tpc_cluskey_vec.push_back(ckey);
+      tpc_surface_vec.push_back(surface);
       tpc_global_vec.push_back(global);
     }
     else
     {
       // si clusters stay where they are
-      global_moved.emplace_back(ckey, global);
+      global_moved.emplace_back(ckey, std::make_pair(surface, global));
     }
   }
 
@@ -96,66 +125,130 @@ std::vector<std::pair<TrkrDefs::cluskey, Acts::Vector3>> TpcClusterMover::proces
     {
       std::cout << "  -- skip this tpc track, not enough clusters: " << tpc_global_vec.size() << std::endl;
     }
-    return global_in;
+    for(unsigned int i=0;i<tpc_global_vec.size();++i)
+      {
+	global_moved.emplace_back(tpc_cluskey_vec[i], std::make_pair(tpc_surface_vec[i], tpc_global_vec[i]));
+      }
+    return global_moved;
   }
 
-  // fit a circle to the TPC clusters
-  const auto [R, X0, Y0] = TrackFitUtils::circle_fit_by_taubin(tpc_global_vec);
+  std::vector<float> fitpars = TrackFitUtils::fitClusters(tpc_global_vec, tpc_cluskey_vec, false);
 
-  // get the straight line representing the z trajectory in the form of z vs radius
-  const auto [A, B] = TrackFitUtils::line_fit(tpc_global_vec);
+  // punt if fit failed
+  if (fitpars.size() < 5)
+  {
+    if (_verbosity > 1)
+    {
+      std::cout << PHWHERE << "Warning: fit failed, return input positions. " << std::endl;
+    }
+    for(unsigned int i=0;i<tpc_global_vec.size();++i)
+      {
+	global_moved.emplace_back(tpc_cluskey_vec[i], std::make_pair(tpc_surface_vec[i], tpc_global_vec[i]));
+      }
+    return global_moved;
+  }
 
-  // Now we need to move each TPC cluster associated with this track to the readout layer radius
+  // Now we need to move each TPC cluster associated with this track to the readout surface radius
   for (unsigned int i = 0; i < tpc_global_vec.size(); ++i)
   {
     TrkrDefs::cluskey cluskey = tpc_cluskey_vec[i];
-    unsigned int layer = TrkrDefs::getLayer(cluskey);
     Acts::Vector3 global = tpc_global_vec[i];
-
-    // get circle position at target surface radius
-    double target_radius = layer_radius[layer - 7];
-    int ret = get_circle_circle_intersection(target_radius, R, X0, Y0, global[0], global[1], _x_proj, _y_proj);
-    if (ret == Fun4AllReturnCodes::ABORTEVENT)
+        
+    // get target surface radius in global coordinates
+    auto* cluster = cluster_map->findCluster(cluskey);
+    if (!cluster)
     {
-      continue;  // skip to next cluster
+      continue;
     }
-    // z projection is unique
-    _z_proj = B + A * target_radius;
-
-    // get circle position at cluster radius
-    double cluster_radius = sqrt(global[0] * global[0] + global[1] * global[1]);
-    ret = get_circle_circle_intersection(cluster_radius, R, X0, Y0, global[0], global[1], _x_start, _y_start);
-    if (ret == Fun4AllReturnCodes::ABORTEVENT)
+    auto surface = surfMaps.getSurface(cluskey, cluster);
+    if (!surface)
     {
-      continue;  // skip to next cluster
+      continue;
     }
-    // z projection is unique
-    _z_start = B + A * cluster_radius;
 
-    // calculate dx, dy, dz along circle trajectory from cluster radius to surface radius
-    double xnew = global[0] - (_x_start - _x_proj);
-    double ynew = global[1] - (_y_start - _y_proj);
-    double znew = global[2] - (_z_start - _z_proj);
+    // Find the intersection of the helix fitted to the global cluster positions with
+    // the surface associated with this cluster key
+    TrkrDefs::subsurfkey sskey = cluster->getSubSurfKey();
+    Acts::Vector3 global_new = global;
+    TrkrDefs::subsurfkey new_subsurfkey = sskey;
+    Surface new_surface = surface;
+    
+    bool ret = get_moved_position(cluskey, cluster, fitpars, global, global_new, new_subsurfkey, new_surface);
 
-    // now move the cluster to the surface radius
-    // we keep the cluster key fixed, change the surface if necessary
-
-    Acts::Vector3 global_new(xnew, ynew, znew);
-
-    // add the new position and surface to the return object
-    global_moved.emplace_back(cluskey, global_new);
-
-    if (_verbosity > 2)
+    // handle failures
+    if (!ret)
     {
-      std::cout << "Cluster " << cluskey << " xstart " << _x_start << " xproj " << _x_proj << " ystart " << _y_start << " yproj " << _y_proj
-                << " zstart " << _z_start << " zproj " << _z_proj << std::endl;
-      std::cout << " layer " << layer << " layer radius " << target_radius << " cluster radius " << cluster_radius << std::endl;
-      std::cout << "  global in " << global[0] << "  " << global[1] << "  " << global[2] << std::endl;
-      std::cout << "  global new " << global_new[0] << "  " << global_new[1] << "  " << global_new[2] << std::endl;
+      global_moved.emplace_back(cluskey, std::make_pair(surface, global));
+      if (_verbosity > 1)
+      {
+        std::cout << PHWHERE << "Warning: get_moved_position failed, use input position. " << std::endl;
+      }
+      continue;
     }
+
+    // sskey changed, check that the new assignment is stable 
+    if(new_subsurfkey != sskey)
+      {
+	TrkrDefs::subsurfkey check_subsurfkey = new_subsurfkey;
+	TrkrDefs::hitsetkey hkey = TrkrDefs::getHitSetKeyFromClusKey(cluskey);
+	auto check_surf = _tGeometry->get_tpc_surface_from_coords(hkey, global_new, check_subsurfkey);
+	if(check_subsurfkey != new_subsurfkey)
+	  {
+	    std::cout << "Warning - subsurface key check is inconsistent: original sskey " << sskey
+		      << " new_sskey " << new_subsurfkey
+		      << " check_sskey " << check_subsurfkey << std::endl;
+	  }
+      }
+
+    global_moved.emplace_back(cluskey, std::make_pair(new_surface, global_new));    
+  }
+  return global_moved;
+}
+
+bool TpcClusterMover::get_moved_position(TrkrDefs::cluskey cluskey, TrkrCluster* cluster, std::vector<float>& fitpars, Acts::Vector3& global, Acts::Vector3& global_new, TrkrDefs::subsurfkey& new_subsurfkey, Surface& new_surface) const
+{
+  const auto& surfMaps = _tGeometry->maps();
+  auto surface = surfMaps.getSurface(cluskey, cluster);
+  if (!surface)
+  {
+    return false;
   }
 
-  return global_moved;
+  const Acts::Vector3 surf_intercept = TrackFitUtils::get_helix_surface_intersection(surface, fitpars, global, _tGeometry);
+
+  // get circle position at cluster radius
+  double cluster_radius = sqrt(global[0] * global[0] + global[1] * global[1]);
+  double R = fitpars[0];
+  double X0 = fitpars[1];
+  double Y0 = fitpars[2];
+  double x_start = 0.0;
+  double y_start = 0.0;
+  int ret = get_circle_circle_intersection(cluster_radius, R, X0, Y0, global[0], global[1], x_start, y_start);
+  if (ret == Fun4AllReturnCodes::ABORTEVENT)
+  {
+    return false;  // skip to next cluster
+  }
+  // z projection is unique
+  double A = fitpars[3];
+  double B = fitpars[4];
+  double z_start = B + A * cluster_radius;
+
+  Acts::Vector3 start_point(x_start, y_start, z_start);
+
+  // calculate dx, dy, dz along circle trajectory from cluster radius to surface radius
+  double xnew = global[0] - (start_point.x() - surf_intercept.x());
+  double ynew = global[1] - (start_point.y() - surf_intercept.y());
+  double znew = global[2] - (start_point.z() - surf_intercept.z());
+
+  global_new(0) = xnew;
+  global_new(1) = ynew;
+  global_new(2) = znew;
+
+  // get the new subsurface key, moved global position, and return them, along with the surface 
+  TrkrDefs::hitsetkey hkey = TrkrDefs::getHitSetKeyFromClusKey(cluskey);
+  new_surface = _tGeometry->get_tpc_surface_from_coords(hkey, global_new, new_subsurfkey);
+
+  return true;
 }
 
 int TpcClusterMover::get_circle_circle_intersection(double target_radius, double R, double X0, double Y0, double xclus, double yclus, double& x, double& y) const

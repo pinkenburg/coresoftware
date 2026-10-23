@@ -31,6 +31,7 @@ class TrkrCluster;
 class TrkrClusterContainer;
 class TpcGlobalPositionWrapper;
 class TrackSeed;
+class PHCompositeNode;
 
 /**
    This class contains the code that generates Acts source links and makes the modified GeoContext
@@ -42,7 +43,7 @@ class MakeSourceLinks
  public:
   MakeSourceLinks() = default;
 
-  void initialize(PHG4TpcGeomContainer* cellgeo);
+  void initialize(ActsGeometry*, PHCompositeNode* );
 
   void setVerbosity(int verbosity) { m_verbosity = verbosity; }
 
@@ -71,7 +72,8 @@ class MakeSourceLinks
       TrkrClusterContainer* /*clusters*/,
       ActsGeometry* /*geometry*/,
       const TpcGlobalPositionWrapper& /*globalpositionWrapper*/,
-      short int crossing);
+      short int crossing,
+      bool use_modified_clus_error = true);
 
  private:
 

@@ -37,10 +37,6 @@
 // convenient aliases for deep copying nodes
 namespace
 {
-  using PHG4Particle_t = PHG4Particlev3;
-  using PHG4VtxPoint_t = PHG4VtxPointv1;
-  using PHG4Hit_t = PHG4Hitv1;
-
   //! utility class to find all PHG4Hit container nodes from the DST node
   class FindG4HitContainer : public PHNodeOperation
   {
@@ -157,7 +153,7 @@ void Fun4AllDstPileupMerger::copy_background_event(PHCompositeNode *dstNode, dou
       {
         // clone vertex, insert in map, and add index conversion
         const auto &sourceVertex = iter->second;
-        auto *newVertex = new PHG4VtxPoint_t(sourceVertex);
+        PHG4VtxPoint *newVertex = dynamic_cast<PHG4VtxPoint *> (sourceVertex->CloneMe());
         newVertex->set_t(sourceVertex->get_t() + delta_t);
         m_g4truthinfo->AddVertex(++key, newVertex);
         vtxid_map.insert(std::make_pair(sourceVertex->get_id(), key));
@@ -177,7 +173,7 @@ void Fun4AllDstPileupMerger::copy_background_event(PHCompositeNode *dstNode, dou
       {
         // clone vertex, shift time, insert in map, and add index conversion
         const auto &sourceVertex = iter->second;
-        auto *newVertex = new PHG4VtxPoint_t(sourceVertex);
+        PHG4VtxPoint *newVertex = dynamic_cast<PHG4VtxPoint *> (sourceVertex->CloneMe());
         newVertex->set_t(sourceVertex->get_t() + delta_t);
         m_g4truthinfo->AddVertex(--key, newVertex);
         vtxid_map.insert(std::make_pair(sourceVertex->get_id(), key));
@@ -191,7 +187,7 @@ void Fun4AllDstPileupMerger::copy_background_event(PHCompositeNode *dstNode, dou
       for (auto iter = range.first; iter != range.second; ++iter)
       {
         const auto &source = iter->second;
-        auto *dest = new PHG4Particle_t(source);
+        PHG4Particle *dest = dynamic_cast<PHG4Particle *> (source->CloneMe()); //save same phparticle version
         m_g4truthinfo->AddParticle(++key, dest);
         dest->set_track_id(key);
 
@@ -232,7 +228,7 @@ void Fun4AllDstPileupMerger::copy_background_event(PHCompositeNode *dstNode, dou
           ++iter)
       {
         const auto &source = iter->second;
-        auto *dest = new PHG4Particle_t(source);
+        PHG4Particle *dest = dynamic_cast<PHG4Particle *> (source->CloneMe()); //save same phparticle version
         m_g4truthinfo->AddParticle(--key, dest);
         dest->set_track_id(key);
 
@@ -271,6 +267,70 @@ void Fun4AllDstPileupMerger::copy_background_event(PHCompositeNode *dstNode, dou
 
         // insert in map
         trkid_map.insert(std::make_pair(source->get_track_id(), dest->get_track_id()));
+      }
+    }
+
+    // also need to copy the sPHENIX primary particle info
+    {
+      // sPHENIX primary particles
+      const auto range = container_truth->GetSPHENIXPrimaryParticleRange();
+      for (auto iter = range.first; iter != range.second; ++iter)
+      {
+        const auto &source = iter->second;
+        if (!source) // guard
+        {
+          std::cout << __PRETTY_FUNCTION__ << " - " << __LINE__ << " - null source (sPHENIX primary) particle" << std::endl;
+          continue;
+        }
+
+        auto keyiter = trkid_map.find(source->get_track_id());
+        if (keyiter == trkid_map.end()) // guard against missing track id in map
+        {
+          std::cout << __PRETTY_FUNCTION__ << " - " << __LINE__ << " - track id " << source->get_track_id() << " not found in map" << std::endl;
+          continue;
+        }
+
+        PHG4Particle *dest = dynamic_cast<PHG4Particle *> (source->CloneMe()); //save same phparticle version
+        dest->set_track_id(keyiter->second);
+
+        if (source->get_parent_id() == 0)
+        {
+          dest->set_parent_id(0);
+        }
+        else
+        {
+          keyiter = trkid_map.find(source->get_parent_id());
+          if (keyiter != trkid_map.end())
+          {
+            dest->set_parent_id(keyiter->second);
+          }
+          else
+          {
+            std::cout << "Fun4AllDstPileupMerger::copy_background_event - track id " << source->get_parent_id() << " not found in map" << std::endl;
+          }
+        }
+
+        keyiter = trkid_map.find(source->get_primary_id());
+        if (keyiter != trkid_map.end())
+        {
+          dest->set_primary_id(keyiter->second);
+        }
+        else
+        {
+          std::cout << "Fun4AllDstPileupMerger::copy_background_event - track id " << source->get_primary_id() << " not found in map" << std::endl;
+        }
+
+        keyiter = vtxid_map.find(source->get_vtx_id());
+        if (keyiter != vtxid_map.end())
+        {
+          dest->set_vtx_id(keyiter->second);
+        }
+        else
+        {
+          std::cout << "Fun4AllDstPileupMerger::copy_background_event - vertex id " << source->get_vtx_id() << " not found in map" << std::endl;
+        }
+
+        m_g4truthinfo->AddsPHENIXPrimaryParticle(dest->get_track_id(), dest);
       }
     }
 
@@ -329,7 +389,7 @@ void Fun4AllDstPileupMerger::copy_background_event(PHCompositeNode *dstNode, dou
       {
         // clone hit
         const auto &sourceHit = iter->second;
-        auto *newHit = new PHG4Hit_t(sourceHit);
+        PHG4Hit *newHit = dynamic_cast<PHG4Hit *> (sourceHit->CloneMe());
 
         // shift time
         newHit->set_t(0, sourceHit->get_t(0) + delta_t);

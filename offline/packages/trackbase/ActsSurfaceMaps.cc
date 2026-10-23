@@ -7,6 +7,7 @@
 #include "ActsSurfaceMaps.h"
 #include "InttDefs.h"
 #include "MvtxDefs.h"
+#include "TpcDefs.h"
 #include "TrkrCluster.h"
 
 #include <Acts/Definitions/Units.hpp>
@@ -34,39 +35,51 @@ bool ActsSurfaceMaps::isTpcSurface(const Acts::Surface* surface) const
   return m_tpcVolumeIds.find(surface->geometryId().volume()) != m_tpcVolumeIds.end();
 }
 
+bool ActsSurfaceMaps::isSiSurface(const Acts::Surface* surface) const
+{
+  return m_siVolumeIds.find(surface->geometryId().volume()) != m_siVolumeIds.end();
+}
+
 bool ActsSurfaceMaps::isMicromegasSurface(const Acts::Surface* surface) const
 {
   return m_micromegasVolumeIds.find(surface->geometryId().volume()) != m_micromegasVolumeIds.end();
 }
 
-Surface ActsSurfaceMaps::getSurface(TrkrDefs::cluskey key,
-                                    TrkrCluster* cluster) const
+Surface ActsSurfaceMaps::getSurface(TrkrDefs::cluskey key, TrkrCluster* cluster) const
 {
   const auto trkrid = TrkrDefs::getTrkrId(key);
   const auto hitsetkey = TrkrDefs::getHitSetKeyFromClusKey(key);
-
   switch (trkrid)
   {
-  case TrkrDefs::TrkrId::micromegasId:
-  {
-    return getMMSurface(hitsetkey);
+    case TrkrDefs::TrkrId::micromegasId:
+    {
+      return getMMSurface(hitsetkey);
+    }
+
+    case TrkrDefs::TrkrId::tpcId:
+    {
+      // need cluster to get the right subsurface
+      if( cluster ) {
+        const auto surfkey = cluster->getSubSurfKey();
+        return getTpcSurface(hitsetkey, surfkey);
+      }
+      break;
+    }
+
+    case TrkrDefs::TrkrId::mvtxId:
+    case TrkrDefs::TrkrId::inttId:
+    {
+      return getSiliconSurface(hitsetkey);
+    }
+
+    default:
+    {
+      break;
+    }
   }
 
-  case TrkrDefs::TrkrId::tpcId:
-  {
-    const auto surfkey = cluster->getSubSurfKey();
-    return getTpcSurface(hitsetkey, surfkey);
-  }
+  return {};
 
-  case TrkrDefs::TrkrId::mvtxId:
-  case TrkrDefs::TrkrId::inttId:
-  {
-    return getSiliconSurface(hitsetkey);
-  }
-  }
-
-  // unreachable
-  return nullptr;
 }
 
 Surface ActsSurfaceMaps::getSiliconSurface(TrkrDefs::hitsetkey hitsetkey) const

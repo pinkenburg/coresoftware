@@ -91,6 +91,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -175,17 +176,54 @@ int MakeActsGeometry::Init(PHCompositeNode * /*topNode*/)
 
 int MakeActsGeometry::InitRun(PHCompositeNode *topNode)
 {
-  m_geomContainerTpc =
-      findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
+  m_geomContainerTpc = findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
 
   PHG4TpcGeom *layergeom = m_geomContainerTpc->GetLayerCellGeom(20);  // z geometry is the same for all layers
   m_max_driftlength = layergeom->get_max_driftlength();
   m_CM_halfwidth = layergeom->get_CM_halfwidth();
-  
   m_maxSurfZ = m_max_driftlength - 0.0001; // add clearance from physical TPC gas volume length to avoid overlaps
-    
+
+    // Make the transform from TPC envelope to global coordinates
+  // This transform is built using the tilt and placement variables from  layergeom
+
+  double rot_x = layergeom->get_rot_x();
+  double rot_y = layergeom->get_rot_y();
+  double rot_z = layergeom->get_rot_z();
+  double place_x = layergeom->get_place_x();
+  double place_y = layergeom->get_place_y();
+  double place_z = layergeom->get_place_z();
+  Eigen::Vector3d rot(rot_x, rot_y, rot_z);
+  Eigen::Vector3d trans(place_x, place_y, place_z);
+
+  Eigen::AngleAxisd alpha(rot(0), Eigen::Vector3d::UnitX());
+  Eigen::AngleAxisd beta(rot(1), Eigen::Vector3d::UnitY());
+  Eigen::AngleAxisd gamma(rot(2), Eigen::Vector3d::UnitZ());
+  Eigen::Quaternion<double> q = gamma * beta * alpha;
+  m_tpc_envelope_world_transform.linear() = q.matrix();
+  m_tpc_envelope_world_transform.translation() = trans;
+  // and the inverse
+  m_tpc_world_envelope_transform = m_tpc_envelope_world_transform.inverse();
+
+  // test
+  Acts::Vector3 test_env(0.0, 0.0, 113.025);
+  std::cout << "MakeActsGeometry::InitRun transform tests north" << std::endl;
+  std::cout << " test envelope position (mm) " << test_env.x()*10 << "  " << test_env.y()*10 << "  " << test_env.z()*10 << std::endl;
+  Acts::Vector3 test_glob =  m_tpc_envelope_world_transform * test_env;
+  std::cout << " test global position (mm) " << test_glob.x()*10 << "  " << test_glob.y()*10 << "  " << test_glob.z()*10 << std::endl;
+  Acts::Vector3 test_env_check =  m_tpc_world_envelope_transform * test_glob;
+  std::cout << " test inverse transform (mm) " << test_env_check.x()*10 << "  " << test_env_check.y()*10 << "  " << test_env_check.z()*10 << std::endl;  
+
+  Acts::Vector3 test_envs(0.0, 0.0, -113.025);
+  std::cout << "MakeActsGeometry::InitRun transform tests south" << std::endl;
+  std::cout << " test envelope position (mm) " << test_envs.x()*10 << "  " << test_envs.y()*10 << "  " << test_envs.z()*10 << std::endl;
+  Acts::Vector3 test_globs =  m_tpc_envelope_world_transform * test_envs;
+  std::cout << " test global position (mm) " << test_globs.x()*10 << "  " << test_globs.y()*10 << "  " << test_globs.z()*10 << std::endl;
+  Acts::Vector3 test_env_checks =  m_tpc_world_envelope_transform * test_globs;
+  std::cout << " test inverse transform (mm) " << test_env_checks.x()*10 << "  " << test_env_checks.y()*10 << "  " << test_env_checks.z()*10 << std::endl;  
+
   // Alignment Transformation declaration of instance - must be here to set initial alignment flag
   AlignmentTransformation alignment_transformation;
+  alignment_transformation.setAlignmentParamsFile(m_alignmentParamsFile);
   alignment_transformation.createAlignmentTransformContainer(topNode);
 
   // set parameter for sampling probability distribution
@@ -208,8 +246,8 @@ int MakeActsGeometry::InitRun(PHCompositeNode *topNode)
 
   alignment_transformation.setUseNewSiliconRotationOrder(m_use_new_silicon_rotation_order);
   alignment_transformation.setUseModuleTiltAlways(m_use_module_tilt_always);
-  
-  
+
+
   if (buildAllGeometry(topNode) != Fun4AllReturnCodes::EVENT_OK)
   {
     return Fun4AllReturnCodes::ABORTEVENT;
@@ -285,6 +323,12 @@ int MakeActsGeometry::InitRun(PHCompositeNode *topNode)
     }
   }
 
+  // fill Si volume ids
+  for (const auto &[hitsetid, surface] : m_clusterSurfaceMapSilicon)
+  {
+    surfMaps.m_siVolumeIds.insert(surface->geometryId().volume());
+  }
+
   // fill Micromegas volume ids
   for (const auto &[hitsetid, surface] : m_clusterSurfaceMapMmEdit)
   {
@@ -296,8 +340,12 @@ int MakeActsGeometry::InitRun(PHCompositeNode *topNode)
   m_actsGeometry->set_drift_velocity(m_drift_velocity);
   m_actsGeometry->set_max_driftlength(m_max_driftlength);
   m_actsGeometry->set_CM_halfwidth(m_CM_halfwidth);
+  std::cout << "MakeActsGeometry::InitRun - m_max_driftlength: " << m_max_driftlength << std::endl;
+  std::cout << "MakeActsGeometry::InitRun - m_CM_halfwidth: " << m_CM_halfwidth << std::endl;
+
   m_actsGeometry->set_tpc_tzero(m_tpc_tzero);
   m_actsGeometry->set_sampa_tzero_bias(m_sampa_tzero_bias);
+  m_actsGeometry->set_tpc_world_envelope_transform(m_tpc_world_envelope_transform);  // transform world position to TPC envelope position
   // alignment_transformation.useInttSurveyGeometry(m_inttSurvey);
 
   if (Verbosity() > 1)
@@ -469,7 +517,7 @@ void MakeActsGeometry::editTPCGeometry(PHCompositeNode *topNode)
     return;
   }
 
-  if (Verbosity() > 3)
+  if (Verbosity() > 0)
   {
     std::cout << "EditTPCGeometry - gas volume: ";
     tpc_gas_north_vol->Print();
@@ -515,7 +563,7 @@ void MakeActsGeometry::addActsTpcSurfaces(TGeoVolume *tpc_gas_vol,
     tpc_gas_measurement_vol[ilayer]->SetFillColor(kYellow);
     tpc_gas_measurement_vol[ilayer]->SetVisibility(kTRUE);
 
-    if (Verbosity() > 3)
+    if (Verbosity() > 0)
     {
       std::cout << " Made box for layer " << ilayer
                 << " with dx " << m_layerThickness[ilayer] << " dy "
@@ -588,7 +636,6 @@ void MakeActsGeometry::buildActsSurfaces()
   // define int argc and char* argv to provide options to processGeometry
   static constexpr int argc = 20;
   char *argv[argc];
-  m_magFieldRescale = 1;
 
   // if(Verbosity() > 0)
   std::cout << PHWHERE << "Magnetic field " << m_magField
@@ -602,10 +649,17 @@ void MakeActsGeometry::buildActsSurfaces()
   std::vector<std::string> argstr =
   {
     "-n1",
-    "--geo-tgeo-jsonconfig", responseFile,
-    "--mat-input-type", "file",
-    "--mat-input-file", materialFile
+    "--geo-tgeo-jsonconfig", responseFile
   };
+
+  if (m_useActsMaterialMap)
+  {
+    argstr.insert(argstr.end(),
+    {
+      "--mat-input-type", "file",
+      "--mat-input-file", materialFile
+    });
+  }
 
   double fieldstrength = std::numeric_limits<double>::quiet_NaN();
   if( isConstantField( m_magField, fieldstrength ) )
@@ -676,15 +730,12 @@ void MakeActsGeometry::buildActsSurfaces()
 
 
 void MakeActsGeometry::setMaterialResponseFile(std::string &responseFile,
-                                               std::string &materialFile)
+                                               std::string &materialFile) const
 {
   responseFile = "tgeo-sphenix-mms.json";
-  materialFile = "sphenix-mm-material.json";
-  // Check to see if files exist locally - if not, use defaults
-  std::ifstream file;
-
-  file.open(responseFile);
-  if (!file.is_open())
+  // Check to see if the geometry response file exists locally. If not, use CDB.
+  std::ifstream responseStream(responseFile);
+  if (!responseStream.is_open())
   {
     std::cout << responseFile
               << " not found locally, use CDB version"
@@ -692,19 +743,29 @@ void MakeActsGeometry::setMaterialResponseFile(std::string &responseFile,
     responseFile = CDBInterface::instance()->getUrl("ACTSGEOMETRYCONFIG");
   }
 
-  file.open(materialFile);
-  if (!file.is_open())
+  if (m_useActsMaterialMap)
   {
-    std::cout << materialFile
-              << " not found locally, use CDB version"
+    materialFile = "sphenix-mm-material.json";
+    std::ifstream materialStream(materialFile);
+    if (!materialStream.is_open())
+    {
+      std::cout << materialFile
+                << " not found locally, use CDB version"
+                << std::endl;
+      materialFile = CDBInterface::instance()->getUrl("ACTSMATERIALMAP");
+    }
+
+    std::cout << "Using Acts material file : " << materialFile
               << std::endl;
-    materialFile = CDBInterface::instance()->getUrl("ACTSMATERIALMAP");
+  }
+  else
+  {
+    materialFile.clear();
+    std::cout << "Using empty Acts material map" << std::endl;
   }
 
-    std::cout << "using Acts material file : " << materialFile
-              << std::endl;
-    std::cout << "Using Acts TGeoResponse file : " << responseFile
-              << std::endl;
+  std::cout << "Using Acts TGeoResponse file : " << responseFile
+            << std::endl;
 
   return;
 }
@@ -726,9 +787,16 @@ void MakeActsGeometry::makeGeometry(int argc, char *argv[], const std::string& r
   config.readJson(responseFile);
 
   std::shared_ptr<Acts::IMaterialDecorator> matDeco = nullptr;
-  if (materialFile.find(".json") != std::string::npos ||
-      materialFile.find(".cbor") != std::string::npos)
+  if (m_useActsMaterialMap)
   {
+    if (materialFile.find(".json") == std::string::npos &&
+        materialFile.find(".cbor") == std::string::npos)
+    {
+      std::cout << "Unsupported Acts material map format: " << materialFile
+                << std::endl;
+      exit(1);
+    }
+
     // Set up the converter first
     Acts::MaterialMapJsonConverter::Config jsonGeoConvConfig;
     // Set up the json-based decorator
@@ -740,7 +808,7 @@ void MakeActsGeometry::makeGeometry(int argc, char *argv[], const std::string& r
     matDeco = std::make_shared<Acts::MaterialWiper>();
   }
   config.materialDecorator = matDeco;
-  // this does the building now. The TGeoDetector owns the 
+  // this does the building now. The TGeoDetector owns the
   // tracking geometry
   m_TGeoDetector = std::make_unique<ActsExamples::TGeoDetectorWithOptions>(config);
 
@@ -845,21 +913,24 @@ void MakeActsGeometry::makeTpcMapPairs(TrackingVolumePtr &tpcVolume)
     for (auto &j : surfaceVector)
     {
       auto surf = j->getSharedPtr();
+      alignmentTransformationContainer::use_alignment = false;  // we want the unaligned center
       auto vec3d = surf->center(m_geoCtxt);
+      alignmentTransformationContainer::use_alignment = true;
+      vec3d /= 10.0;
+      auto vec3d_envelope = m_tpc_world_envelope_transform * vec3d;  // needs to be in TPC envelope coordinates due to tilt, displacement,  in sims
 
-      // convert to cm
-      std::vector<double> world_center = {vec3d(0) / 10.0,
-                                          vec3d(1) / 10.0,
-                                          vec3d(2) / 10.0};
+      std::vector<double> world_center = {vec3d_envelope(0),
+                                          vec3d_envelope(1),
+                                          vec3d_envelope(2)};
 
       TrkrDefs::hitsetkey hitsetkey = getTpcHitSetKeyFromCoords(world_center);
       unsigned int layer = TrkrDefs::getLayer(hitsetkey);
+      // unsigned int sector = TpcDefs::getSectorId(hitsetkey);
+      // unsigned int side = TpcDefs::getSide(hitsetkey);
 
       // If there is already an entry for this hitsetkey, add the surface
       // to its corresponding vector
-      // std::map<TrkrDefs::hitsetkey, std::vector<Surface>>::iterator mapIter;
       std::map<unsigned int, std::vector<Surface>>::iterator mapIter;
-      // mapIter = m_clusterSurfaceMapTpcEdit.find(hitsetkey);
       mapIter = m_clusterSurfaceMapTpcEdit.find(layer);
 
       if (mapIter != m_clusterSurfaceMapTpcEdit.end())
@@ -882,7 +953,7 @@ void MakeActsGeometry::makeTpcMapPairs(TrackingVolumePtr &tpcVolume)
 //____________________________________________________________________________________________
 void MakeActsGeometry::makeMmMapPairs(TrackingVolumePtr &mmVolume)
 {
-  if (Verbosity())
+  if (Verbosity()>1)
   {
     std::cout << "MakeActsGeometry::makeMmMapPairs - mmVolume: " << mmVolume->volumeName() << std::endl;
   }
@@ -944,7 +1015,7 @@ void MakeActsGeometry::makeMmMapPairs(TrackingVolumePtr &mmVolume)
         continue;
       }
 
-      if (Verbosity())
+      if (Verbosity()>1)
       {
         std::cout << "MakeActsGeometry::makeMmMapPairs - layer: " << layer << " tileid: " << tileid << std::endl;
       }
@@ -1110,7 +1181,7 @@ void MakeActsGeometry::makeMvtxMapPairs(TrackingVolumePtr &mvtxVolume)
       auto vec3d = surf->center(m_geoCtxt);
       std::vector<double> world_center = {(vec3d(0) - v_globaldisplacement[0]) / 10.0, (vec3d(1) - v_globaldisplacement[1]) / 10.0, (vec3d(2) - v_globaldisplacement[2]) / 10.0};  // convert from mm to cm
       double layer_rad = sqrt(pow(world_center[0], 2) + pow(world_center[1], 2));
-      if (Verbosity() > 0)
+      if (Verbosity() > 1)
       {
         std::cout << "[DEBUG] MVTX surface center (before misalignment): (x,y,z)=(" << vec3d(0) / 10. << "," << vec3d(1) / 10. << "," << vec3d(2) / 10. << "), layer_rad=" << sqrt(pow(vec3d(0) / 10., 2) + pow(vec3d(1) / 10., 2)) << std::endl;
         std::cout << "[DEBUG] MVTX surface center: (x,y,z)=(" << world_center[0] << "," << world_center[1] << "," << world_center[2] << "), layer_rad=" << layer_rad << std::endl;
@@ -1210,7 +1281,9 @@ void MakeActsGeometry::makeMvtxMapPairs(TrackingVolumePtr &mvtxVolume)
 
 TrkrDefs::hitsetkey MakeActsGeometry::getTpcHitSetKeyFromCoords(std::vector<double> &world)
 {
-  // Look up TPC surface index values from world position of surface center
+  // This is used only in simulations
+  // so the input position is assumed to be in tpc envelope coords - i.e. tilt removed
+  // Look up TPC surface index values from tpc envelope position of surface center
   // layer
   unsigned int layer = 999;
   double layer_rad = sqrt(pow(world[0], 2) + pow(world[1], 2));
@@ -1220,6 +1293,7 @@ TrkrDefs::hitsetkey MakeActsGeometry::getTpcHitSetKeyFromCoords(std::vector<doub
         m_layerRadius[ilayer] - m_layerThickness[ilayer] / 2.0;
     double tpc_ref_radius_high =
         m_layerRadius[ilayer] + m_layerThickness[ilayer] / 2.0;
+
     if (layer_rad >= tpc_ref_radius_low && layer_rad < tpc_ref_radius_high)
     {
       layer = ilayer;
@@ -1262,6 +1336,12 @@ TrkrDefs::hitsetkey MakeActsGeometry::getTpcHitSetKeyFromCoords(std::vector<doub
       break;
     }
   }
+
+  if (Verbosity() > 3 && layer == 15)
+  {
+      std::cout << " layer_rad " << layer_rad << " m_layerRadius[layer] " << m_layerRadius[layer-7] << " found layer " << layer << " side " << side << " world " << world[0] << "  " << world[1] << "  " << world[2] << " phi_world " << phi_world << " readout_mod " << readout_mod << std::endl;
+    }
+
   if (readout_mod >= m_nTpcModulesPerLayer)
   {
     std::cout << PHWHERE
@@ -1271,16 +1351,13 @@ TrkrDefs::hitsetkey MakeActsGeometry::getTpcHitSetKeyFromCoords(std::vector<doub
   }
 
   TrkrDefs::hitsetkey hitset_key = TpcDefs::genHitSetKey(layer, readout_mod, side);
-  if (Verbosity() > 3)
+  if (Verbosity() > 3 && layer == 7)
   {
-    if (layer == 30)
-    {
-      std::cout << "   world = " << world[0] << "  " << world[1]
-                << "  " << world[2] << " phi_world "
-                << phi_world * 180 / M_PI << " layer " << layer
-                << " readout_mod " << readout_mod << " side " << side
-                << " hitsetkey " << hitset_key << std::endl;
-    }
+    std::cout << "   world = " << world[0] << "  " << world[1]
+	      << "  " << world[2] << " phi_world "
+	      << phi_world * 180 / M_PI << " layer " << layer
+	      << " readout_mod " << readout_mod << " side " << side
+	      << " hitsetkey " << hitset_key << std::endl;
   }
 
   return hitset_key;

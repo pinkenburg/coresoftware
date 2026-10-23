@@ -1,0 +1,313 @@
+// Tell emacs that this is a C++ source
+//  -*- C++ -*-.
+#ifndef TPCTRACKRECO_TPCPOLYCLUSTERIZER_H
+#define TPCTRACKRECO_TPCPOLYCLUSTERIZER_H
+
+#include <fun4all/SubsysReco.h>
+#include <trackbase/TrkrDefs.h>
+
+#include <array>
+#include <memory>
+#include <string>
+#include <vector>
+
+class Tpc_AssembledTrackContainer;
+class IdealPadMap;
+class PHCompositeNode;
+class PHGarfield;
+class Tpc_PolyClusterContainer;
+class TpcCrossingDecisionContainer;
+class TrkrHitSetContainer;
+class PHG4CylinderGeomContainer;
+class PHG4TpcGeomContainer;
+class TpcConditions;
+
+class Tpc_PolyClusterizer : public SubsysReco
+{
+ public:
+  explicit Tpc_PolyClusterizer(const std::string& name = "Tpc_PolyClusterizer");
+  ~Tpc_PolyClusterizer() override;
+
+  int InitRun(PHCompositeNode*) override;
+  int process_event(PHCompositeNode*) override;
+
+  static constexpr unsigned int NPhiSamples = 24;
+
+  void setInputNodeName(const std::string& n) { m_inputNodeName = n; }
+  void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
+  void setCrossingDecisionNodeName(const std::string& n) { m_crossingDecisionNodeName = n; }
+  void setMaxAcceptedTier(unsigned char v) { m_maxAcceptedTier = v; }
+  void setT0(double v)
+  {
+    m_t0 = v;
+    m_t0Override = true;
+  }
+
+  void setTpcAdcClock(double v)
+  {
+    m_tpcAdcClock = v;
+    m_tpcAdcClockOverride = true;
+  }
+
+  void setCrossingPeriodNs(double v)
+  {
+    m_crossingPeriodNs = v;
+  }
+
+  void setReverseDriftStepNs(double v)
+  {
+    m_reverseDriftStepNs = v;
+  }
+
+  void setReverseDriftSubsteps(unsigned int n) {
+    m_reverseDriftSubsteps = std::max(1U, n);
+  }
+
+  void setKEffSide0(double v)
+  {
+    m_kEffSide0 = v;
+    m_kEffSide0Override = true;
+  }
+
+  void setKEffSide1(double v)
+  {
+    m_kEffSide1 = v;
+    m_kEffSide1Override = true;
+  }
+
+  void setField3DCoefficientFile(const std::string& n)
+  {
+    m_field3DCoefficientFile = n;
+    m_field3DCoefficientFileOverride = true;
+  }
+
+  void setElectricFieldMap(const std::string& n)
+  {
+    m_electricFieldMap = n;
+    m_electricFieldMapOverride = true;
+  }
+
+  void setElectricFieldMap3DSide0(const std::string& n)
+  {
+    m_field3DSide0 = n;
+    m_field3DSide0Override = true;
+  }
+
+  void setElectricFieldMap3DSide1(const std::string& n)
+  {
+    m_field3DSide1 = n;
+    m_field3DSide1Override = true;
+  }
+
+  void setFrameElectricFieldMap3DSide0(const std::string& n)
+  {
+    m_framesSide0 = n;
+    m_framesSide0Override = true;
+  }
+
+  void setFrameElectricFieldMap3DSide1(const std::string& n)
+  {
+    m_framesSide1 = n;
+    m_framesSide1Override = true;
+  }
+
+  void setCMVoltageDefault(double v)
+  {
+    m_cmVoltageDefault = v;
+    m_cmVoltageDefaultOverride = true;
+  }
+
+  void setUseSurveyGeometry(bool v)
+  {
+    use_survey_geometry = v;
+    m_useSurveyGeometryOverride = true;
+  }
+
+  void setMoveTpc(double x, double y, double z)
+  {
+    m_tpcMove = {{x, y, z}};
+    m_tpcGeometryOverride = true;
+  }
+
+  void setRotateTpc(unsigned int index, double x, double y, double z)
+  {
+    if (index < m_tpcRotations.size())
+    {
+      m_tpcRotations[index] = {{x, y, z}};
+      m_tpcGeometryOverride = true;
+    }
+  }
+
+  void setStartZ(double south_z, double north_z)
+  {
+    m_startZSouth = south_z;
+    m_startZNorth = north_z;
+  }
+
+  void setFrameChargeScale(double v)
+  {
+    m_frameChargeScale = v;
+    m_frameChargeScaleOverride = true;
+  }
+
+  void setFieldCageVoltageOffsets(double ifcSouth, double ifcNorth,
+                                  double ofcSouth, double ofcNorth)
+  {
+    m_fieldCageVoltageOffsets = {{ifcSouth, ifcNorth, ofcSouth, ofcNorth}};
+    m_fieldCageVoltageOverride = true;
+  }
+
+  void setUse2DElectricFieldMap(bool v)
+  {
+    m_use2DElectricFieldMap = v;
+  }
+
+  void setUseBCOkEffs(bool v)
+  {
+    m_useBCOkEffs = v;
+    m_useBCOkEffsOverride = true;
+  }
+
+  void setUsePHGarfieldDefaults(bool v) { m_usePHGarfieldDefaults = v; }
+
+  void setIsNonDistortedMC(bool v)
+  {
+    m_isNonDistortedMC = v;
+  }
+
+ private:
+  struct Point
+  {
+    TrkrDefs::hitsetkey hitsetkey{0};
+    TrkrDefs::hitkey hitkey{0};
+    unsigned int layer{0};
+    unsigned int side{0};
+    unsigned int pad{0};
+    unsigned int tbin{0};
+    double adc{0.0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+  };
+
+  struct Centroid
+  {
+    bool ok{false};
+    unsigned int layer{0};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    double rms_x{0.0};
+    double rms_y{0.0};
+    double rms_z{0.0};
+  };
+
+  struct ClusterParameters
+  {
+    double adc{0.0};
+    unsigned int phi_width{0};
+    unsigned int time_width{0};
+    double phase{0.0};
+  };
+
+  struct DriftPoint
+  {
+    float delta_r{0.0F};
+    float delta_phi{0.0F};
+    float z{0.0F};
+  };
+
+  struct DriftPolyline
+  {
+    double phi{0.0};
+    std::vector<DriftPoint> points;
+  };
+
+  int getNodes(PHCompositeNode*);
+  int createNodes(PHCompositeNode*);
+  bool make_xyz_point(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk, short crossing, Point& p) const;
+  bool build_drift_lookup();
+  bool sample_drift_lookup(unsigned int layer,
+                           unsigned int side,
+                           unsigned int pad,
+                           unsigned int tbin,
+                           short crossing,
+                           double& x,
+                           double& y,
+                           double& z) const;
+  bool load_cdb_inputs();
+  ClusterParameters make_cluster_parameters(const std::vector<Point>& points, const Centroid& centroid, int side) const;
+  static Centroid make_centroid(const std::vector<Point>& points);
+  void configure_garfield(PHGarfield* garfield) const;
+  void reconfigure_garfield(PHGarfield* garfield) const;
+  static unsigned int drift_lookup_index(unsigned int layer_index, unsigned int side, unsigned int sector, unsigned int sample);
+  // t0 in time bins for one TPC side: macro/default t0 plus PHGarfield's run dt0.
+  double t0_for_side(unsigned int side) const { return m_t0 + m_deltaT0Tbins[side & 1U]; }
+  std::string m_inputNodeName;
+  std::string m_outputNodeName;
+  std::string m_crossingDecisionNodeName{"TPC_CROSSING_DECISIONS"};
+  std::string m_electricFieldMap;
+  std::string m_field3DCoefficientFile;
+  std::string m_field3DSide0;
+  std::string m_field3DSide1;
+  std::string m_framesSide0;
+  std::string m_framesSide1;
+  unsigned char m_maxAcceptedTier{1};
+  Tpc_AssembledTrackContainer* m_assembledTracks{nullptr};
+  Tpc_PolyClusterContainer* m_clusters{nullptr};
+  TpcCrossingDecisionContainer* m_crossingDecisions{nullptr};
+  TrkrHitSetContainer* m_hits{nullptr};
+  IdealPadMap* m_idealPadMap{nullptr};
+
+  PHGarfield* m_garfield{nullptr};                // shared instance from PAR node (not owned)
+  std::unique_ptr<PHGarfield> m_ownedGarfield{};  // private instance, only with setUsePHGarfieldDefaults(false)
+
+  PHG4TpcGeomContainer* m_geomContainerTpc{nullptr};
+  TpcConditions* m_conditions{nullptr};
+  std::array<DriftPolyline, 48 * 2 * 12 * NPhiSamples> m_driftLookup;
+  unsigned int m_event{0};
+  double m_t0{8};
+  std::array<double, 2> m_deltaT0Tbins{{0.0, 0.0}};  // from PHGarfield in InitRun
+  double m_tpcAdcClock{56.881262};
+  double m_crossingPeriodNs{106.56};
+  double m_reverseDriftStepNs{56.881262};
+  unsigned int m_reverseDriftSubsteps{10};
+
+  //! starting z position for primary electron backward drift
+  /**
+   * quoted values must be kept consistent with _max_driftlength + _CM_halfwidth
+   * as defined in offline/packages/trackbase/ActsGeometry.h
+   */
+  double m_startZSouth{-102.605};
+  double m_startZNorth{102.605};
+  double m_kEffSide0{0.0};
+  double m_kEffSide1{0.0};
+  double m_cmVoltageDefault{375.0};
+  bool use_survey_geometry = true;
+  bool m_kEffSide0Override{false};
+  bool m_kEffSide1Override{false};
+  bool m_field3DCoefficientFileOverride{false};
+  bool m_electricFieldMapOverride{false};
+  bool m_field3DSide0Override{false};
+  bool m_field3DSide1Override{false};
+  bool m_framesSide0Override{false};
+  bool m_framesSide1Override{false};
+  bool m_use2DElectricFieldMap{false};
+  bool m_useBCOkEffs{true};
+  bool m_usePHGarfieldDefaults{true};
+  bool m_useSurveyGeometryOverride{false};
+  bool m_cmVoltageDefaultOverride{false};
+  bool m_tpcGeometryOverride{false};
+  bool m_frameChargeScaleOverride{false};
+  bool m_fieldCageVoltageOverride{false};
+  bool m_useBCOkEffsOverride{false};
+  bool m_isNonDistortedMC{false};
+  bool m_t0Override{false};
+  bool m_tpcAdcClockOverride{false};
+
+  std::array<double, 3> m_tpcMove{{0.0, 0.0, 0.0}};                                             //{{-0.16775, -0.0337, -0.71365}};
+  std::array<std::array<double, 3>, 2> m_tpcRotations{{{{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}}};  //{{{{0.0, 0.01485 / 10.0, 0.0}}, {{0.0298 / 8.0, 0.0, 0.0}}}};
+  double m_frameChargeScale{-180.0};
+  std::array<double, 4> m_fieldCageVoltageOffsets{{211.0, 0.0, 0.0, 0.0}};
+};
+#endif

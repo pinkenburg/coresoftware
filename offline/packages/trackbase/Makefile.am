@@ -38,7 +38,6 @@ AM_LDFLAGS = \
 
 
 pkginclude_HEADERS = \
-  ActsAborter.h \
   ActsGeometry.h \
   ActsSourceLink.h \
   ActsSurfaceMaps.h \
@@ -65,11 +64,18 @@ pkginclude_HEADERS = \
   InttDefs.h \
   InttEventInfo.h \
   InttEventInfov1.h \
+  LaserAggregatedPad.h \
+  LaserAggregatedPadContainer.h \
+  LaserAggregatedPadContainerv1.h \
+  LaserAggregatedPadv1.h \
   LaserCluster.h \
   LaserClusterContainer.h \
   LaserClusterContainerv1.h \
   LaserClusterv1.h \
   LaserClusterv2.h \
+  LaserClusterv3.h \
+  LaserClusterv4.h \
+  LaserClusterv5.h \
   MaterialWiper.h \
   MagneticFieldOptions.h \
   MvtxDefs.h \
@@ -77,6 +83,7 @@ pkginclude_HEADERS = \
   MvtxEventInfov1.h \
   MvtxEventInfov2.h \
   MvtxEventInfov3.h \
+  padkey.h \
   RawHit.h \
   RawHitSet.h \
   RawHitSetContainer.h \
@@ -115,6 +122,7 @@ pkginclude_HEADERS = \
   TrkrClusterv3.h \
   TrkrClusterv4.h \
   TrkrClusterv5.h \
+  TrkrClusterv6.h \
   TrkrDefs.h \
   TrkrHit.h \
   TrkrHitSet.h \
@@ -129,7 +137,8 @@ pkginclude_HEADERS = \
   TrkrHitTruthAssoc.h \
   TrkrHitTruthAssocv1.h \
   TrkrHitv1.h \
-  TrkrHitv2.h
+  TrkrHitv2.h \
+  TrkrHitv3.h
 
 ROOTDICTS = \
   CMFlashClusterContainer_Dict.cc \
@@ -146,11 +155,18 @@ ROOTDICTS = \
   ClusHitsVerbosev1_Dict.cc \
   InttEventInfo_Dict.cc \
   InttEventInfov1_Dict.cc \
+  LaserAggregatedPad_Dict.cc \
+  LaserAggregatedPadContainer_Dict.cc \
+  LaserAggregatedPadContainerv1_Dict.cc \
+  LaserAggregatedPadv1_Dict.cc \
   LaserClusterContainer_Dict.cc \
   LaserClusterContainerv1_Dict.cc \
   LaserCluster_Dict.cc \
   LaserClusterv1_Dict.cc \
   LaserClusterv2_Dict.cc \
+  LaserClusterv3_Dict.cc \
+  LaserClusterv4_Dict.cc \
+  LaserClusterv5_Dict.cc \
   MvtxEventInfo_Dict.cc \
   MvtxEventInfov1_Dict.cc \
   MvtxEventInfov2_Dict.cc \
@@ -187,6 +203,7 @@ ROOTDICTS = \
   TrkrClusterv3_Dict.cc \
   TrkrClusterv4_Dict.cc \
   TrkrClusterv5_Dict.cc \
+  TrkrClusterv6_Dict.cc \
   TrkrHitSetContMvtxHelper_Dict.cc \
   TrkrHitSetContMvtxHelperv1_Dict.cc \
   TrkrHitSetContainer_Dict.cc \
@@ -200,7 +217,8 @@ ROOTDICTS = \
   TrkrHitTruthAssocv1_Dict.cc \
   TrkrHit_Dict.cc \
   TrkrHitv1_Dict.cc \
-  TrkrHitv2_Dict.cc
+  TrkrHitv2_Dict.cc \
+  TrkrHitv3_Dict.cc
 
 
 pcmdir = $(libdir)
@@ -235,9 +253,14 @@ libtrack_io_la_SOURCES = \
   InttDefs.cc \
   InttEventInfo.cc \
   InttEventInfov1.cc \
+  LaserAggregatedPadContainerv1.cc \
+  LaserAggregatedPadv1.cc \
   LaserClusterContainerv1.cc \
   LaserClusterv1.cc \
   LaserClusterv2.cc \
+  LaserClusterv3.cc \
+  LaserClusterv4.cc \
+  LaserClusterv5.cc \
   MvtxDefs.cc \
   MvtxEventInfo.cc \
   MvtxEventInfov1.cc \
@@ -273,6 +296,7 @@ libtrack_io_la_SOURCES = \
   TrkrClusterv3.cc \
   TrkrClusterv4.cc \
   TrkrClusterv5.cc \
+  TrkrClusterv6.cc \
   TrkrDefs.cc \
   TrkrHitSet.cc \
   TrkrHitSetContMvtxHelper.cc \
@@ -285,7 +309,8 @@ libtrack_io_la_SOURCES = \
   TrkrHitSetTpcv1.cc \
   TrkrHitTruthAssocv1.cc \
   TrkrHitv1.cc \
-  TrkrHitv2.cc
+  TrkrHitv2.cc \
+  TrkrHitv3.cc
 
 libtrack_la_LIBADD = \
   libtrack_io.la \
@@ -293,6 +318,7 @@ libtrack_la_LIBADD = \
   -lActsPluginRoot \
   -lActsExamplesDetectorTGeo \
   -lffamodules \
+  -lg4detectors \
   -lboost_program_options
 
 libtrack_io_la_LIBADD = \

@@ -36,7 +36,7 @@ class MbdReco : public SubsysReco
 
   void DoOnlyFits()                  { _fitsonly = 1; }
   void DoFitEval(const int s)        { _fiteval = s; }
-  void SetCalPass(const int calpass) { _calpass = calpass; }
+  void SetCalPass(const int calpass) { _calpass = calpass; if (calpass==1) DoOnlyFits(); }
   void SetProcChargeCh(const bool s) { _always_process_charge = s; }
   void SetMbdTrigOnly(const int m)   { _mbdonly = m; }
 
@@ -47,7 +47,7 @@ class MbdReco : public SubsysReco
   int  getNodes(PHCompositeNode *topNode);
   int  _simflag{0};
   int  _calpass{0};
-  bool _always_process_charge{0};
+  bool _always_process_charge{1};
   int  _mbdonly{0};     // only use mbd triggers
   int  _rawdstflag{0};  // dst with raw container
   int  _fitsonly{0};    // stop reco after waveform fits (for DST_CALOFIT pass)

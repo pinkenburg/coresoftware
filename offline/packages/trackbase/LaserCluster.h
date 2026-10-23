@@ -7,10 +7,30 @@
 #ifndef TRACKBASE_LASERCLUSTER_H
 #define TRACKBASE_LASERCLUSTER_H
 
+#include "TpcDefs.h"
+
 #include <phool/PHObject.h>
+
+
 
 #include <iostream>
 #include <limits>
+
+struct LaserClusterHitInfo
+{
+  TrkrDefs::hitsetkey hitsetkey = 0;
+  TrkrDefs::hitkey hitkey = 0;
+  uint16_t adc    = 0;
+  ClassDefNV(LaserClusterHitInfo, 1)
+};
+
+struct LaserClusterHitInfoDouble
+{
+  TrkrDefs::hitsetkey hitsetkey = 0;
+  TrkrDefs::hitkey hitkey = 0;
+  double adc    = 0;
+  ClassDefNV(LaserClusterHitInfoDouble, 1)
+};
 
 /**
  * @brief Base class for laser cluster object
@@ -60,15 +80,27 @@ class LaserCluster : public PHObject
   virtual float getIT() const { return std::numeric_limits<float>::quiet_NaN(); }
   virtual void setIT(float) {}
 
+  virtual unsigned int getLayerInt() const { return std::numeric_limits<unsigned int>::max(); }
+  virtual void setLayerInt(unsigned int) {}
+  virtual unsigned int getIPhiInt() const { return std::numeric_limits<unsigned int>::max(); }
+  virtual void setIPhiInt(unsigned int) {}
+  virtual unsigned int getITInt() const { return std::numeric_limits<unsigned int>::max(); }
+  virtual void setITInt(unsigned int) {}
+
   //
   // cluster info
   //
   virtual void setAdc(unsigned int) {}
   virtual unsigned int getAdc() const { return std::numeric_limits<unsigned int>::max(); }
 
+  virtual void setAdcDouble(double) {}
+  virtual double getAdcDouble() const { return std::numeric_limits<double>::max(); }
 
   virtual unsigned int getNhits() const {return std::numeric_limits<unsigned int>::max();}
   virtual void setNhits( unsigned int) {}
+
+  virtual unsigned int getNhitsDouble() const {return std::numeric_limits<unsigned int>::max();}
+  virtual void setNhitsDouble( unsigned int) {}
 
   virtual void setNLayers(unsigned int) {}
   virtual unsigned int getNLayers() const { return std::numeric_limits<unsigned int>::max();}
@@ -121,6 +153,17 @@ class LaserCluster : public PHObject
   virtual void setHitAdc(int, float) {}
   virtual float getHitAdc(int) const { return std::numeric_limits<float>::quiet_NaN(); }
 
+  virtual void addHit(TrkrDefs::hitsetkey, TrkrDefs::hitkey, uint16_t) {}
+  virtual LaserClusterHitInfo getHit(int) const { return LaserClusterHitInfo(std::numeric_limits<TrkrDefs::hitsetkey>::max(), std::numeric_limits<TrkrDefs::hitkey>::max(), std::numeric_limits<uint16_t>::max()); }
+
+  virtual void addHitDouble(TrkrDefs::hitsetkey, TrkrDefs::hitkey, double) {}
+  virtual LaserClusterHitInfoDouble getHitDouble(int) const { return LaserClusterHitInfoDouble(std::numeric_limits<TrkrDefs::hitsetkey>::max(), std::numeric_limits<TrkrDefs::hitkey>::max(), std::numeric_limits<double>::max()); }
+
+  virtual void setTruthIndex(int) {}
+  virtual int getTruthIndex() const { return -999; }
+
+  virtual void setIsLamination(bool) {}
+  virtual bool getIsLamination() const { return false; }
 
  protected:
   LaserCluster() = default;

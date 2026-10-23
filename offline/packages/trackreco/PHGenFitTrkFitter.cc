@@ -42,6 +42,7 @@
 #include <phool/phool.h>
 
 #include <trackbase/ActsGeometry.h>
+#include <trackbase/ClusterErrorPara.h>
 #include <trackbase/InttDefs.h>
 #include <trackbase/MvtxDefs.h>
 #include <trackbase/TpcDefs.h>
@@ -53,7 +54,7 @@
 #include <trackbase_historic/SvtxTrackMap.h>
 #include <trackbase_historic/SvtxTrackMap_v2.h>
 #include <trackbase_historic/SvtxTrackState.h>  // for SvtxTrackState
-#include <trackbase_historic/SvtxTrackState_v2.h>
+#include <trackbase_historic/SvtxTrackState_v3.h>
 #include <trackbase_historic/SvtxTrack_v4.h>
 #include <trackbase_historic/TrackSeed.h>
 #include <trackbase_historic/TrackSeedContainer.h>
@@ -80,8 +81,10 @@
 
 #include <cmath>  // for sqrt, NAN
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -94,8 +97,6 @@ namespace genfit
 #define LogDebug(exp) std::cout << "DEBUG: " << __FILE__ << ": " << __LINE__ << ": " << (exp) << std::endl
 #define LogError(exp) std::cout << "ERROR: " << __FILE__ << ": " << __LINE__ << ": " << (exp) << std::endl
 #define LogWarning(exp) std::cout << "WARNING: " << __FILE__ << ": " << __LINE__ << ": " << (exp) << std::endl
-
-using namespace std;
 
 //______________________________________________________
 namespace
@@ -115,27 +116,82 @@ namespace
     return std::sqrt( square(x)+square(y));
   }
 
-  // convert gf state to SvtxTrackState_v2
-  SvtxTrackState_v2 create_track_state(float pathlength, const genfit::MeasuredStateOnPlane* gf_state)
+  // convert gf state to SvtxTrackState_v3. Local coordinates are filled
+  // separately because they are defined by the detector surface associated
+  // with the cluster, rather than by the cluster-centered GenFit plane.
+  SvtxTrackState_v3 create_track_state(float pathlength, const genfit::MeasuredStateOnPlane& gf_state)
   {
-    SvtxTrackState_v2 out(pathlength);
-    out.set_x(gf_state->getPos().x());
-    out.set_y(gf_state->getPos().y());
-    out.set_z(gf_state->getPos().z());
+    SvtxTrackState_v3 out(pathlength);
+    out.set_localX(std::numeric_limits<float>::quiet_NaN());
+    out.set_localY(std::numeric_limits<float>::quiet_NaN());
+    out.set_x(gf_state.getPos().x());
+    out.set_y(gf_state.getPos().y());
+    out.set_z(gf_state.getPos().z());
 
-    out.set_px(gf_state->getMom().x());
-    out.set_py(gf_state->getMom().y());
-    out.set_pz(gf_state->getMom().z());
+    out.set_px(gf_state.getMom().x());
+    out.set_py(gf_state.getMom().y());
+    out.set_pz(gf_state.getMom().z());
 
     for (int i = 0; i < 6; i++)
     {
       for (int j = i; j < 6; j++)
       {
-        out.set_error(i, j, gf_state->get6DCov()[i][j]);
+        out.set_error(i, j, gf_state.get6DCov()[i][j]);
       }
     }
 
     return out;
+  }
+
+  // Convert a GenFit state position to the common SvtxTrackState local
+  // coordinates. The GenFit measurement plane is centered on the corrected
+  // cluster position, whereas the Acts detector surface has its own origin.
+  // Anchor the conversion to the cluster local coordinates so translations
+  // applied to the cluster (for example distortion corrections) are retained.
+  std::optional<Acts::Vector2> get_surface_local_position(
+      ActsGeometry* geometry,
+      const TrkrDefs::cluskey cluster_key,
+      TrkrCluster* cluster,
+      const short int crossing,
+      const Acts::Vector3& cluster_global,
+      const genfit::MeasuredStateOnPlane& gf_state)
+  {
+    if (!geometry || !cluster)
+    {
+      return std::nullopt;
+    }
+
+    const auto surface = geometry->maps().getSurface(cluster_key, cluster);
+    if (!surface)
+    {
+      return std::nullopt;
+    }
+
+    const Acts::Vector2 cluster_local = geometry->getLocalCoords(cluster_key, cluster, crossing);
+    const Acts::Vector3 state_global(
+        gf_state.getPos().x(),
+        gf_state.getPos().y(),
+        gf_state.getPos().z());
+
+    if (!cluster_local.allFinite() || !cluster_global.allFinite() || !state_global.allFinite())
+    {
+      return std::nullopt;
+    }
+
+    const auto rotation = surface->localToGlobalTransform(
+        geometry->geometry().getGeoContext()).rotation();
+    const Acts::Vector3 delta = state_global - cluster_global;
+
+    Acts::Vector2 state_local(
+        cluster_local.x() + delta.dot(rotation.col(0)),
+        cluster_local.y() + delta.dot(rotation.col(1)));
+
+    if (!state_local.allFinite())
+    {
+      return std::nullopt;
+    }
+
+    return state_local;
   }
 
   // get cluster keys from a given track
@@ -152,13 +208,26 @@ namespace
     return out;
   }
 
+  //______________________________________________________________________
+  // acts vector printout
   [[maybe_unused]] std::ostream& operator<<(std::ostream& out, const Acts::Vector3& vector)
   {
     out << "(" << vector.x() << ", " << vector.y() << ", " << vector.z() << ")";
     return out;
   }
 
-  TVector3 get_world_from_local_vect( ActsGeometry* geometry, Surface surface, const TVector3& local_vect )
+  //______________________________________________________________________
+  // genfit state vector printout
+  [[maybe_unused]] std::ostream& operator<<(std::ostream& out, const genfit::MeasuredStateOnPlane& state )
+  {
+    out
+      << "position (" << state.getPos().x() << ", " << state.getPos().y() << ", " << state.getPos().z() << ") "
+      << "radius " << get_r(  state.getPos().x(), state.getPos().y() );
+    return out;
+  }
+  //______________________________________________________________________
+  // convert local vector to global coordinates using a given surface and acts geometry
+  TVector3 get_world_from_local_vect( ActsGeometry* geometry, const Surface& surface, const TVector3& local_vect )
   {
 
     // get global vector from local, using ACTS surface
@@ -180,7 +249,7 @@ namespace
 /*
  * Constructor
  */
-PHGenFitTrkFitter::PHGenFitTrkFitter(const string& name)
+PHGenFitTrkFitter::PHGenFitTrkFitter(const std::string& name)
   : SubsysReco(name)
 {
 }
@@ -286,10 +355,10 @@ int PHGenFitTrkFitter::process_event(PHCompositeNode* topNode)
   }
 
   // stands for Refit_GenFit_Tracks
-  vector<genfit::Track*> rf_gf_tracks;
-  vector<std::shared_ptr<PHGenFit::Track> > rf_phgf_tracks;
+  std::vector<genfit::Track*> rf_gf_tracks;
+  std::vector<std::shared_ptr<PHGenFit::Track> > rf_phgf_tracks;
 
-  map<unsigned int, unsigned int> svtxtrack_genfittrack_map;
+  std::map<unsigned int, unsigned int> svtxtrack_genfittrack_map;
 
   for (const auto& [key, svtx_track] : *m_trackMap)
   {
@@ -297,7 +366,7 @@ int PHGenFitTrkFitter::process_event(PHCompositeNode* topNode)
 
     if (Verbosity() > 10)
     {
-      cout << "   process SVTXTrack " << key << endl;
+      std::cout << "   process SVTXTrack " << key << std::endl;
       svtx_track->identify();
     }
 
@@ -315,11 +384,12 @@ int PHGenFitTrkFitter::process_event(PHCompositeNode* topNode)
         rf_gf_tracks.push_back(rf_phgf_track->getGenFitTrack());
       }
 
-      if (Verbosity() > 10) cout << "Done refitting input track" << svtx_track->get_id() << " or rf_phgf_track " << rf_phgf_tracks.size() << endl;
+      if (Verbosity() > 10)
+      { std::cout << "Done refitting input track" << svtx_track->get_id() << " or rf_phgf_track " << rf_phgf_tracks.size() << std::endl; }
     }
     else if (Verbosity() >= 1)
     {
-      cout << "failed refitting input track# " << key << endl;
+      std::cout << "failed refitting input track# " << key << std::endl;
     }
   }
 
@@ -388,10 +458,10 @@ int PHGenFitTrkFitter::CreateNodes(PHCompositeNode* topNode)
   // create nodes...
   PHNodeIterator iter(topNode);
 
-  auto dstNode = static_cast<PHCompositeNode*>(iter.findFirst("PHCompositeNode", "DST"));
+  auto* dstNode = static_cast<PHCompositeNode*>(iter.findFirst("PHCompositeNode", "DST"));
   if (!dstNode)
   {
-    cerr << PHWHERE << "DST Node missing, doing nothing." << endl;
+    std::cerr << PHWHERE << "DST Node missing, doing nothing." << std::endl;
     return Fun4AllReturnCodes::ABORTEVENT;
   }
   PHNodeIterator iter_dst(dstNode);
@@ -404,7 +474,7 @@ int PHGenFitTrkFitter::CreateNodes(PHCompositeNode* topNode)
     dstNode->addNode(svtx_node);
     if (Verbosity())
     {
-      cout << "SVTX node added" << endl;
+      std::cout << "SVTX node added" << std::endl;
     }
   }
 
@@ -413,7 +483,7 @@ int PHGenFitTrkFitter::CreateNodes(PHCompositeNode* topNode)
   if (!m_trackMap)
   {
     m_trackMap = new SvtxTrackMap_v2;
-    auto node = new PHIODataNode<PHObject>(m_trackMap, _trackMap_name, "PHObject");
+    auto* node = new PHIODataNode<PHObject>(m_trackMap, _trackMap_name, "PHObject");
     svtx_node->addNode(node);
   }
 
@@ -468,6 +538,17 @@ void PHGenFitTrkFitter::set_fit_silicon_mms(bool value)
   }
 }
 
+//______________________________________________________
+void PHGenFitTrkFitter::set_use_micromegas(bool value)
+{
+  m_use_micromegas = value;
+
+  // disable the two micromegas layers from the fit
+  disable_layer(55, !value);
+  disable_layer(56, !value);
+
+}
+
 /*
  * GetNodes():
  *  Get all the all the required nodes off the node tree
@@ -503,7 +584,7 @@ int PHGenFitTrkFitter::GetNodes(PHCompositeNode* topNode)
 
   if (!m_clustermap)
   {
-    cout << PHWHERE << "PHGenFitTrkFitter::GetNodes - TRKR_CLUSTER node not found on node tree" << endl;
+    std::cout << PHWHERE << "PHGenFitTrkFitter::GetNodes - TRKR_CLUSTER node not found on node tree" << std::endl;
     return Fun4AllReturnCodes::ABORTEVENT;
   }
 
@@ -535,7 +616,7 @@ int PHGenFitTrkFitter::GetNodes(PHCompositeNode* topNode)
   m_trackMap = findNode::getClass<SvtxTrackMap>(topNode, _trackMap_name);
   if (!m_trackMap && _event < 2)
   {
-    cout << "PHGenFitTrkFitter::GetNodes - SvtxTrackMap node not found on node tree" << endl;
+    std::cout << "PHGenFitTrkFitter::GetNodes - SvtxTrackMap node not found on node tree" << std::endl;
     return Fun4AllReturnCodes::ABORTEVENT;
   }
 
@@ -558,7 +639,7 @@ std::shared_ptr<PHGenFit::Track> PHGenFitTrkFitter::ReFitTrack(PHCompositeNode* 
   // std::shared_ptr<PHGenFit::Track> empty_track(nullptr);
   if (!intrack)
   {
-    cerr << PHWHERE << " Input SvtxTrack is nullptr!" << endl;
+    std::cerr << PHWHERE << " Input SvtxTrack is nullptr!" << std::endl;
     return nullptr;
   }
 
@@ -616,7 +697,7 @@ std::shared_ptr<PHGenFit::Track> PHGenFitTrkFitter::ReFitTrack(PHCompositeNode* 
     if (Verbosity() > 10)
     {
       const int layer_out = TrkrDefs::getLayer(cluster_key);
-      cout << "    Layer " << layer_out << " cluster " << cluster_key << " radius " << r << endl;
+      std::cout << "    Layer " << layer_out << " cluster " << cluster_key << " radius " << r << std::endl;
     }
   }
 
@@ -653,8 +734,9 @@ std::shared_ptr<PHGenFit::Track> PHGenFitTrkFitter::ReFitTrack(PHCompositeNode* 
     const auto globalPosition_acts = m_globalPositionWrapper.getGlobalPositionDistortionCorrected(cluster_key, cluster, crossing);
     const TVector3 pos(globalPosition_acts.x(), globalPosition_acts.y(), globalPosition_acts.z());
 
-    const double cluster_rphi_error = cluster->getRPhiError();
-    const double cluster_z_error = cluster->getZError();
+    const auto cluster_errors = ClusterErrorPara::get_clusterv5_modified_error(cluster, pos.Perp(), cluster_key);
+    const double cluster_rphi_error = std::sqrt(cluster_errors.first);
+    const double cluster_z_error = std::sqrt(cluster_errors.second);
 
     seed_mom.SetPhi(pos.Phi());
     seed_mom.SetTheta(pos.Theta());
@@ -745,12 +827,13 @@ std::shared_ptr<PHGenFit::Track> PHGenFitTrkFitter::ReFitTrack(PHCompositeNode* 
   }
 
   if (Verbosity() > 10)
-    cout << " track->getChisq() " << track->get_chi2() << " get_ndf " << track->get_ndf()
-         << " mom.X " << track->get_mom().X()
-         << " mom.Y " << track->get_mom().Y()
-         << " mom.Z " << track->get_mom().Z()
-         << endl;
-
+  {
+    std::cout << " track->getChisq() " << track->get_chi2() << " get_ndf " << track->get_ndf()
+      << " mom.X " << track->get_mom().X()
+      << " mom.Y " << track->get_mom().Y()
+      << " mom.Z " << track->get_mom().Z()
+      << std::endl;
+  }
   return track;
 }
 
@@ -797,11 +880,52 @@ std::shared_ptr<SvtxTrack> PHGenFitTrkFitter::MakeSvtxTrack(const SvtxTrack* svt
 
   double du2 = gf_state_beam_line_ca->getCov()[3][3];
   double dv2 = gf_state_beam_line_ca->getCov()[4][4];
-  // cout << PHWHERE << "        u " << u << " v " << v << " du2 " << du2 << " dv2 " << dv2 << " dvr2 " << dvr2 << endl;
-  // delete gf_state_beam_line_ca;
 
   // create new track
   auto out_track = std::make_shared<SvtxTrack_v4>(*svtx_track);
+
+  const auto crossing = svtx_track->get_crossing();
+  assert(crossing != SHRT_MAX);
+
+  // Create a state and attach local coordinates in the Acts detector-surface
+  // convention. If the cluster or surface cannot be resolved, localX/Y stay
+  // NaN while the valid global state and covariance are preserved.
+  const auto make_track_state = [this, crossing](
+                                    const float pathlength,
+                                    const genfit::MeasuredStateOnPlane& gf_state,
+                                    const TrkrDefs::cluskey cluster_key)
+  {
+    auto state = create_track_state(pathlength, gf_state);
+    state.set_cluskey(cluster_key);
+
+    auto* cluster = m_clustermap->findCluster(cluster_key);
+    if (!cluster)
+    {
+      if (Verbosity() > 1)
+      {
+        std::cout << PHWHERE << " Missing cluster " << cluster_key
+                  << " while calculating state local coordinates" << std::endl;
+      }
+      return state;
+    }
+
+    const auto cluster_global =
+        m_globalPositionWrapper.getGlobalPositionDistortionCorrected(cluster_key, cluster, crossing);
+    const auto state_local = get_surface_local_position(
+        m_tgeometry, cluster_key, cluster, crossing, cluster_global, gf_state);
+    if (state_local)
+    {
+      state.set_localX(state_local->x());
+      state.set_localY(state_local->y());
+    }
+    else if (Verbosity() > 1)
+    {
+      std::cout << PHWHERE << " Failed to calculate local coordinates for cluster "
+                << cluster_key << std::endl;
+    }
+
+    return state;
+  };
 
   // clear states and insert empty one for vertex position
   out_track->clear_states();
@@ -811,7 +935,9 @@ std::shared_ptr<SvtxTrack> PHGenFitTrkFitter::MakeSvtxTrack(const SvtxTrack* svt
     so that the track state list is never empty. Note that insert_state, despite taking a pointer as argument,
     does not take ownership of the state
     */
-    SvtxTrackState_v2 first(0.0);
+    SvtxTrackState_v3 first(0.0);
+    first.set_localX(std::numeric_limits<float>::quiet_NaN());
+    first.set_localY(std::numeric_limits<float>::quiet_NaN());
     out_track->insert_state(&first);
   }
 
@@ -839,10 +965,6 @@ std::shared_ptr<SvtxTrack> PHGenFitTrkFitter::MakeSvtxTrack(const SvtxTrack* svt
   const auto mom = gf_state_vertex_ca->getMom();
   const auto pos = gf_state_vertex_ca->getPos();
   const auto cov = gf_state_vertex_ca->get6DCov();
-
-  //	genfit::MeasuredStateOnPlane* gf_state_vertex_ca =
-  //			phgf_track->extrapolateToLine(vertex_position,
-  //					TVector3(0., 0., 1.));
 
   u = gf_state_vertex_ca->getState()[3];
   v = gf_state_vertex_ca->getState()[4];
@@ -896,37 +1018,15 @@ std::shared_ptr<SvtxTrack> PHGenFitTrkFitter::MakeSvtxTrack(const SvtxTrack* svt
 
     if (Verbosity() > 30)
     {
-      cout << " vn.X " << vn.X() << " vn.Y " << vn.Y() << " vn.Z " << vn.Z() << endl;
-      cout << " pos_in.X " << pos_in[0][0] << " pos_in.Y " << pos_in[1][0] << " pos_in.Z " << pos_in[2][0] << endl;
-      cout << " pos_out.X " << pos_out[0][0] << " pos_out.Y " << pos_out[1][0] << " pos_out.Z " << pos_out[2][0] << endl;
+      std::cout << " vn.X " << vn.X() << " vn.Y " << vn.Y() << " vn.Z " << vn.Z() << std::endl;
+      std::cout << " pos_in.X " << pos_in[0][0] << " pos_in.Y " << pos_in[1][0] << " pos_in.Z " << pos_in[2][0] << std::endl;
+      std::cout << " pos_out.X " << pos_out[0][0] << " pos_out.Y " << pos_out[1][0] << " pos_out.Z " << pos_out[2][0] << std::endl;
     }
 
     dca3d_xy = pos_out[0][0];
     dca3d_z = pos_out[2][0];
     dca3d_xy_error = sqrt(cov_out[0][0]);
     dca3d_z_error = sqrt(cov_out[2][2]);
-
-#ifdef _DEBUG_
-    cout << __LINE__ << ": Vertex: ----------------" << endl;
-    vertex_position.Print();
-    vertex_cov.Print();
-
-    cout << __LINE__ << ": State: ----------------" << endl;
-    state6.Print();
-    cov6.Print();
-
-    cout << __LINE__ << ": Mean: ----------------" << endl;
-    pos_in.Print();
-    cout << "===>" << endl;
-    pos_out.Print();
-
-    cout << __LINE__ << ": Cov: ----------------" << endl;
-    cov_in.Print();
-    cout << "===>" << endl;
-    cov_out.Print();
-
-    cout << endl;
-#endif
   }
   catch (...)
   {
@@ -963,15 +1063,11 @@ std::shared_ptr<SvtxTrack> PHGenFitTrkFitter::MakeSvtxTrack(const SvtxTrack* svt
     }
   }
 
-#ifdef _DEBUG_
-  cout << __LINE__ << endl;
-#endif
-
-  const auto gftrack = phgf_track->getGenFitTrack();
-  const auto rep = gftrack->getCardinalRep();
+  const auto* gftrack = phgf_track->getGenFitTrack();
+  const auto* rep = gftrack->getCardinalRep();
   for (unsigned int id = 0; id < gftrack->getNumPointsWithMeasurement(); ++id)
   {
-    genfit::TrackPoint* trpoint = gftrack->getPointWithMeasurementAndFitterInfo(id, gftrack->getCardinalRep());
+    auto* trpoint = gftrack->getPointWithMeasurementAndFitterInfo(id, gftrack->getCardinalRep());
 
     if (!trpoint)
     {
@@ -979,58 +1075,41 @@ std::shared_ptr<SvtxTrack> PHGenFitTrkFitter::MakeSvtxTrack(const SvtxTrack* svt
       continue;
     }
 
-    auto kfi = static_cast<genfit::KalmanFitterInfo*>(trpoint->getFitterInfo(rep));
+    auto* kfi = static_cast<genfit::KalmanFitterInfo*>(trpoint->getFitterInfo(rep));
     if (!kfi)
     {
-      if (Verbosity() > 1) LogWarning("!kfi");
+      if (Verbosity() > 1) { LogWarning("!kfi"); }
       continue;
     }
 
-    const genfit::MeasuredStateOnPlane* gf_state = nullptr;
+    std::optional<genfit::MeasuredStateOnPlane> gf_state{};
     try
     {
-      // this works because KalmanFitterInfo returns a const reference to internal object and not a temporary object
-      gf_state = &kfi->getFittedState(true);
+      gf_state = kfi->getFittedState();
     }
     catch (...)
     {
       if (Verbosity() >= 1)
-        LogWarning("Exrapolation failed!");
-    }
-    if (!gf_state)
-    {
-      if (Verbosity() >= 1)
-        LogWarning("Exrapolation failed!");
+      { LogWarning("Exrapolation failed!"); }
       continue;
     }
+
+//     // calculate path length by extrapolating backward to vertex position
+//     auto temp = gf_state.value();
+//     const float pathlength = -temp.extrapolateToPoint(vertex_position);
+
     genfit::MeasuredStateOnPlane temp;
     float pathlength = -phgf_track->extrapolateToPoint(temp, vertex_position, id);
 
     // create new svtx state and add to track
-    auto state = create_track_state(pathlength, gf_state);
-
-    // get matching cluster key from phgf_track and assign to state
-    state.set_cluskey(phgf_track->get_cluster_keys()[id]);
-
+    auto state = make_track_state(pathlength, gf_state.value(), phgf_track->get_cluster_keys()[id]);
     out_track->insert_state(&state);
 
-#ifdef _DEBUG_
-    cout
-        << __LINE__
-        << ": " << id
-        << ": " << pathlength << " => "
-        << sqrt(square(state->get_x()) + square(state->get_y()))
-        << endl;
-#endif
   }
 
   // loop over clusters, check if layer is disabled, include extrapolated SvtxTrackState
   if (!_disabled_layers.empty())
   {
-    // get crossing
-    const auto crossing = svtx_track->get_crossing();
-    assert(crossing != SHRT_MAX);
-
     unsigned int id_min = 0;
     for (const auto& cluster_key : get_cluster_keys(svtx_track))
     {
@@ -1046,94 +1125,163 @@ std::shared_ptr<SvtxTrack> PHGenFitTrkFitter::MakeSvtxTrack(const SvtxTrack* svt
       // get position
       const auto globalPosition = m_globalPositionWrapper.getGlobalPositionDistortionCorrected( cluster_key, cluster, crossing );
       const TVector3 pos_A(globalPosition.x(), globalPosition.y(), globalPosition.z() );
-      const float r_cluster = std::sqrt( square(globalPosition.x()) + square(globalPosition.y()) );
+      const auto r_cluster = get_r(globalPosition.x(),globalPosition.y());
 
-      // loop over states
-      /* find first state whose radius is larger than that of cluster if any */
-      unsigned int id = id_min;
-      for (; id < gftrack->getNumPointsWithMeasurement(); ++id)
+      if( m_extrapolation_mode == ExtrapolationMode::Legacy )
       {
-        auto trpoint = gftrack->getPointWithMeasurementAndFitterInfo(id, rep);
-        if (!trpoint) continue;
+          try
+          {
+            // copy state vector and extrapolate to cluster
+            auto tmp = *gf_state_vertex_ca;
+            auto pathlength = tmp.extrapolateToPoint(pos_A);
 
-        auto kfi = static_cast<genfit::KalmanFitterInfo*>(trpoint->getFitterInfo(rep));
-        if (!kfi) continue;
+            // create state and assign
+            auto state = make_track_state(pathlength, tmp, cluster_key);
+            out_track->insert_state(&state);
 
-        const genfit::MeasuredStateOnPlane* gf_state = nullptr;
+          } catch(...) {
+            if( Verbosity() )
+            { LogWarning("extrapolateToPoint failed!"); }
+          }
+
+      } else {
+
+        // loop over states
+        /* find first state whose radius is larger than that of cluster if any */
+        unsigned int id = id_min;
+        for (; id < gftrack->getNumPointsWithMeasurement(); ++id)
+        {
+          auto* trpoint = gftrack->getPointWithMeasurementAndFitterInfo(id, rep);
+          if (!trpoint) { continue; }
+
+          auto* kfi = static_cast<genfit::KalmanFitterInfo*>(trpoint->getFitterInfo(rep));
+          if (!kfi) { continue; }
+
+          std::optional<genfit::MeasuredStateOnPlane> gf_state;
+          try
+          {
+            gf_state = kfi->getFittedState();
+          }
+          catch (...)
+          {
+            if (Verbosity()) { LogWarning("Failed to get kf fitted state"); }
+            continue;
+          }
+
+          const auto r_track = get_r( gf_state->getPos().x(), gf_state->getPos().y());
+          if (r_track > r_cluster) { break; }
+        }
+
+        // forward extrapolation
+        std::optional<genfit::MeasuredStateOnPlane> gf_state_forward{};
+        std::optional<genfit::MeasuredStateOnPlane> gf_state_backward{};
+
+        float pathlength_forward = 0;
+        float pathlength_backward = 0;
+
+        // first point is previous, if valid
+        if (id > 0) { id_min = id - 1; }
+
+        // extrapolate forward
         try
         {
-          gf_state = &kfi->getFittedState(true);
+          auto* trpoint = gftrack->getPointWithMeasurementAndFitterInfo(id_min, rep);
+          if( !trpoint ) { throw std::logic_error( "invalid argument" ); }
+
+          auto* kfi = static_cast<genfit::KalmanFitterInfo*>(trpoint->getFitterInfo(rep));
+          gf_state_forward = kfi->getFittedState();
+          pathlength_forward = gf_state_forward->extrapolateToPoint( pos_A );
+
+          auto tmp = kfi->getFittedState();
+          pathlength_forward -= tmp.extrapolateToPoint(vertex_position);
         }
         catch (...)
         {
           if (Verbosity())
+          { std::cout << "PHGenFitTrkFitter::MakeSvtxTrack - Failed to forward extrapolate from id " << id_min << " to disabled layer " << layer << std::endl; }
+
+          gf_state_forward = std::nullopt;
+        }
+
+        // extrapolate backward if possible
+        if (id > 0 && id < gftrack->getNumPointsWithMeasurement() )
+        {
+          try
           {
-            LogWarning("Failed to get kf fitted state");
+            auto* trpoint = gftrack->getPointWithMeasurementAndFitterInfo(id, rep);
+            if( !trpoint ) { throw std::logic_error( "invalid argument" ); }
+
+            auto* kfi = static_cast<genfit::KalmanFitterInfo*>(trpoint->getFitterInfo(rep));
+            gf_state_backward = kfi->getFittedState();
+
+            pathlength_backward = gf_state_backward->extrapolateToPoint( pos_A );
+
+            auto tmp = kfi->getFittedState();
+            pathlength_backward -= tmp.extrapolateToPoint(vertex_position);
+          }
+          catch (...)
+          {
+            if (Verbosity())
+            { std::cout << "PHGenFitTrkFitter::MakeSvtxTrack - Failed to forward extrapolate from id " << id_min << " to disabled layer " << layer << std::endl; }
+
+            gf_state_backward = std::nullopt;
           }
         }
 
-        if (!gf_state) continue;
-
-        float r_track = std::sqrt(square(gf_state->getPos().x()) + square(gf_state->getPos().y()));
-        if (r_track > r_cluster) break;
-      }
-
-      // forward extrapolation
-      genfit::MeasuredStateOnPlane gf_state;
-      float pathlength = 0;
-
-      // first point is previous, if valid
-      if (id > 0) id_min = id - 1;
-
-      // extrapolate forward
-      try
-      {
-        auto trpoint = gftrack->getPointWithMeasurementAndFitterInfo(id_min, rep);
-        if (!trpoint) continue;
-
-        auto kfi = static_cast<genfit::KalmanFitterInfo*>(trpoint->getFitterInfo(rep));
-        gf_state = *kfi->getForwardUpdate();
-        pathlength = gf_state.extrapolateToPoint( pos_A );
-        auto tmp = *kfi->getBackwardUpdate();
-        pathlength -= tmp.extrapolateToPoint(vertex_position);
-      }
-      catch (...)
-      {
-        if (Verbosity())
+        // update state
+        if( m_extrapolation_mode == ExtrapolationMode::Forward && gf_state_forward )
         {
-          std::cerr << PHWHERE << "Failed to forward extrapolate from id " << id_min << " to disabled layer " << layer << std::endl;
-        }
-        continue;
-      }
 
-      // also extrapolate backward from next state if any
-      // and take the weighted average between both points
-      if (id > 0 && id < gftrack->getNumPointsWithMeasurement())
-        try
-        {
-          auto trpoint = gftrack->getPointWithMeasurementAndFitterInfo(id, rep);
-          if (!trpoint) continue;
+          // create new svtx state and add to track
+          auto state = make_track_state(pathlength_forward, gf_state_forward.value(), cluster_key);
+          out_track->insert_state(&state);
 
-          auto kfi = static_cast<genfit::KalmanFitterInfo*>(trpoint->getFitterInfo(rep));
-          genfit::KalmanFittedStateOnPlane gf_state_backward = *kfi->getBackwardUpdate();
-          gf_state_backward.extrapolateToPlane(gf_state.getPlane());
-          gf_state = genfit::calcAverageState(gf_state, gf_state_backward);
-        }
-        catch (...)
-        {
-          if (Verbosity())
+        } else if( m_extrapolation_mode == ExtrapolationMode::Backward && gf_state_backward ) {
+
+          // create new svtx state and add to track
+          auto state = make_track_state(pathlength_backward, gf_state_backward.value(), cluster_key);
+          out_track->insert_state(&state);
+
+        } else if( m_extrapolation_mode == ExtrapolationMode::Bidirectional && ( gf_state_forward || gf_state_backward ) ) {
+
+          if( gf_state_forward && gf_state_backward )
           {
-            std::cerr << PHWHERE << "Failed to backward extrapolate from id " << id << " to disabled layer " << layer << std::endl;
-          }
-          continue;
-        }
+            try {
+              // extrapolate backward state to the same plane as forward
+              gf_state_backward->extrapolateToPlane(gf_state_forward->getPlane());
 
-      // create new svtx state and add to track
-      auto state = create_track_state(pathlength, &gf_state);
-      state.set_cluskey(cluster_key);
-      out_track->insert_state(&state);
-    }
-  }
+              // calculate weighted average
+              auto gf_state = genfit::calcAverageState(gf_state_forward.value(), gf_state_backward.value());
+
+              // assign to track
+              auto state = make_track_state(pathlength_forward, gf_state, cluster_key);
+              out_track->insert_state(&state);
+            } catch( ... ) {
+              if( Verbosity() )
+              { LogWarning("extrapolateToPoint failed!"); }
+            }
+
+          } else if( gf_state_forward ) {
+
+            // fall back to forward extrapolation
+            // create new svtx state and add to track
+            auto state = make_track_state(pathlength_forward, gf_state_forward.value(), cluster_key);
+            out_track->insert_state(&state);
+
+          } else {
+
+            // fall back to backward extrapolation
+            // create new svtx state and add to track
+            auto state = make_track_state(pathlength_backward, gf_state_backward.value(), cluster_key);
+            out_track->insert_state(&state);
+
+          }
+        } // test extrapolation mode
+
+      }
+
+    } // loop over clusters
+  } // check on disabled layers
 
   // printout all track state
   if (Verbosity())

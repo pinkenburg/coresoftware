@@ -34,6 +34,7 @@
 #include <TF1.h>
 
 #include <limits>
+#include <map>      // for map
 #include <string>   // for string
 #include <tuple>    // for tuple
 #include <utility>  // for pair
@@ -67,22 +68,26 @@ class KFParticle_Tools : protected KFParticle_MVA
 
   void getTracksFromBC(PHCompositeNode *topNode, const int &bunch_crossing, const std::string &vertexMapName, int &nTracks, int &nPVs);
 
+  int getNchargedSiSeedMultiplicity(PHCompositeNode *topNode, const int &bunch_crossing) const;
+
   int getTracksFromVertex(PHCompositeNode *topNode, const KFParticle &vertex, const std::string &vertexMapName);
 
   /*const*/ bool isGoodTrack(const KFParticle &particle, const std::vector<KFParticle> &primaryVertices);
 
-  int calcMinIP(const KFParticle &track, const std::vector<KFParticle> &PVs, float &minimumIP, float &minimumIPchi2, bool do3D = true);
+  bool isTPConlyAtZeroCrossing(const KFParticle&);
 
-  std::vector<int> findAllGoodTracks(const std::vector<KFParticle> &daughterParticles, const std::vector<KFParticle> &primaryVertices);
+  int calcMinPV_DCA(const KFParticle &track, const std::vector<KFParticle> &PVs, float &minimumPV_DCA, float &minimumPV_DCA_stddev, bool do3D = true);
 
-  std::vector<std::vector<int>> findTwoProngs(std::vector<KFParticle> daughterParticles, std::vector<int> goodTrackIndex, int nTracks);
+  std::vector<int> findAllGoodTracks(const std::vector<KFParticle> &daughterParticles);//, const std::vector<KFParticle> &primaryVertices);
 
-  std::vector<std::vector<int>> findNProngs(std::vector<KFParticle> daughterParticles,
+  std::vector<std::vector<int>> findTwoProngs(std::vector<KFParticle> daughterParticles, std::vector<int> goodTrackIndex, int nTracks, const std::vector<KFParticle> &primaryVertices);
+
+  std::vector<std::vector<int>> findNProngs(const std::vector<KFParticle> &daughterParticles,
                                             const std::vector<int> &goodTrackIndex,
                                             std::vector<std::vector<int>> goodTracksThatMeet,
-                                            int nRequiredTracks, unsigned int nProngs);
+                                            int nRequiredTracks, unsigned int nProngs, const std::vector<KFParticle> &primaryVertices);
 
-  std::vector<std::vector<int>> appendTracksToIntermediates(KFParticle intermediateResonances[], const std::vector<KFParticle> &daughterParticles, const std::vector<int> &goodTrackIndex, int num_remaining_tracks);
+  std::vector<std::vector<int>> appendTracksToIntermediates(KFParticle intermediateResonances[], const std::vector<KFParticle> &daughterParticles, const std::vector<int> &goodTrackIndex, int num_remaining_tracks, const std::vector<KFParticle> &primaryVertices);
 
   /// Calculates the cosine of the angle betweent the flight direction and momentum
   float eventDIRA(const KFParticle &particle, const KFParticle &vertex, bool do3D = true);
@@ -121,7 +126,11 @@ class KFParticle_Tools : protected KFParticle_MVA
 
   double get_dEdx_fitValue(float momentum, int PID);
 
+  bool vertexToleranceCheck(float vertexMap_pos[3], float kfp_vertex_pos[3]);
+
   bool checkTrackAndVertexMatch(KFParticle vDaughters[], int nTracks, const KFParticle &vertex);
+
+  std::vector<int> getParticleCrossings(const KFParticle &particle);
 
   void set_dont_use_global_vertex(bool set_variable) { m_dont_use_global_vertex = set_variable; }
 
@@ -142,14 +151,14 @@ class KFParticle_Tools : protected KFParticle_MVA
   std::vector<float> m_intermediate_min_pt;
   std::vector<float> m_intermediate_min_dira;
   std::vector<float> m_intermediate_min_fdchi2;
-  std::vector<float> m_intermediate_min_ip_xy;
-  std::vector<float> m_intermediate_max_ip_xy;
-  std::vector<float> m_intermediate_min_ipchi2_xy;
-  std::vector<float> m_intermediate_max_ipchi2_xy;
-  std::vector<float> m_intermediate_min_ip;
-  std::vector<float> m_intermediate_max_ip;
-  std::vector<float> m_intermediate_min_ipchi2;
-  std::vector<float> m_intermediate_max_ipchi2;
+  std::vector<float> m_intermediate_min_PV_dca_xy;
+  std::vector<float> m_intermediate_max_PV_dca_xy;
+  std::vector<float> m_intermediate_min_PV_dca_stddev_xy;
+  std::vector<float> m_intermediate_max_PV_dca_stddev_xy;
+  std::vector<float> m_intermediate_min_PV_dca;
+  std::vector<float> m_intermediate_max_PV_dca;
+  std::vector<float> m_intermediate_min_PV_dca_stddev;
+  std::vector<float> m_intermediate_max_PV_dca_stddev;
   std::vector<float> m_intermediate_vertex_volume;
 
   bool m_use_PID{false};
@@ -198,13 +207,13 @@ class KFParticle_Tools : protected KFParticle_MVA
 
   float m_track_ptchi2{std::numeric_limits<float>::max()};
 
-  float m_track_ip_xy{-100};
+  float m_track_PV_dca_xy{-100};
 
-  float m_track_ipchi2_xy{-1000};
+  float m_track_PV_dca_stddev_xy{-1000};
 
-  float m_track_ip{-1};
+  float m_track_PV_dca{-1};
 
-  float m_track_ipchi2{-1};
+  float m_track_PV_dca_stddev{-1};
 
   float m_track_chi2ndof{std::numeric_limits<float>::max()};
 
@@ -215,6 +224,8 @@ class KFParticle_Tools : protected KFParticle_MVA
   int m_nTPCStates{20};
 
   int m_nTPOTStates{0};
+
+  bool m_use_tpc_only_tracks{false};
 
   float m_comb_DCA_xy{std::numeric_limits<float>::max()};
 
@@ -234,13 +245,13 @@ class KFParticle_Tools : protected KFParticle_MVA
 
   float m_mother_pt{-1};
 
-  float m_mother_ip{std::numeric_limits<float>::max()};
+  float m_mother_PV_dca{std::numeric_limits<float>::max()};
 
-  float m_mother_ipchi2{std::numeric_limits<float>::max()};
+  float m_mother_PV_dca_stddev{std::numeric_limits<float>::max()};
 
-  float m_mother_ip_xy{std::numeric_limits<float>::max()};
+  float m_mother_PV_dca_xy{std::numeric_limits<float>::max()};
 
-  float m_mother_ipchi2_xy{std::numeric_limits<float>::max()};
+  float m_mother_PV_dca_stddev_xy{std::numeric_limits<float>::max()};
 
   float m_mother_vertex_volume{std::numeric_limits<float>::max()};
 
@@ -258,13 +269,21 @@ class KFParticle_Tools : protected KFParticle_MVA
 
   bool m_bunch_crossing_zero_only{false};
 
-  bool m_require_bunch_crossing_match{true};
+  bool m_use_fake_pv{false};
 
   bool m_use_mbd_vertex{false};
 
   bool m_dont_use_global_vertex{false};
 
+  bool m_force_mixed_event = false;
+
+  bool m_require_bunch_crossing_match{true};
+
   bool m_require_track_and_vertex_match{false};
+
+  std::map<int, std::vector<int>> m_intermediate_crossings;
+
+  int m_next_intermediate_id{-2};
 
   std::string m_vtx_map_node_name;
   std::string m_trk_map_node_name;

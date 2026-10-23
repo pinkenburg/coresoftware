@@ -55,14 +55,17 @@ pkginclude_HEADERS = \
   PHInitVertexing.h \
   PHMicromegasTpcTrackMatching.h \
   PHSiliconTpcTrackMatching.h \
+  PHSiliconTrackMatching.h \
   PHSiliconCosmicSeeding.h \
   PHSimpleVertexFinder.h \
   PHTrackPruner.h \
   PHTrackCleaner.h \
   PHTrackSelector.h \
+  PHTrackTrackSeedSynchronization.h \
   PHRaveVertexing.h \
   PHSiliconHelicalPropagator.h \
   PHSiliconSeedMerger.h \
+  PHSiliconSeedPruner.h \
   PHSimpleKFProp.h \
   PHStreakFinder.h \
   PHTpcClusterMover.h \
@@ -74,8 +77,9 @@ pkginclude_HEADERS = \
   PHTrackSetMerging.h \
   PHTrackSetCopyMerging.h \
   PHTruthClustering.h \
-  PHTruthTrackSeeding.h \
   PHTruthSiliconAssociation.h \
+  PHTruthTrackFitter.h \
+  PHTruthTrackSeeding.h \
   PHTruthVertexing.h \
   PrelimDistortionCorrection.h \
   PrelimDistortionCorrectionAuAu.h \
@@ -84,6 +88,9 @@ pkginclude_HEADERS = \
   TrackingIterationCounter.h \
   TpcSeedFilter.h \
   WeightedFitter.h
+
+noinst_HEADERS = \
+  PHSiliconSeedPrunerHelper.h
 
 ROOTDICTS = \
   AssocInfoContainer_Dict.cc \
@@ -143,7 +150,10 @@ libtrack_reco_la_SOURCES = \
   PHRaveVertexing.cc \
   PHSiliconHelicalPropagator.cc \
   PHSiliconSeedMerger.cc \
+  PHSiliconSeedPruner.cc \
+  PHSiliconSeedPrunerHelper.cc \
   PHSiliconTpcTrackMatching.cc \
+  PHSiliconTrackMatching.cc \
   PHSiliconCosmicSeeding.cc \
   PHSimpleKFProp.cc \
   PHSimpleVertexFinder.cc \
@@ -155,13 +165,15 @@ libtrack_reco_la_SOURCES = \
   PHTrackClusterAssociator.cc \
   PHTrackSeeding.cc \
   PHTrackSelector.cc \
+  PHTrackTrackSeedSynchronization.cc \
   PHTrackSetMerging.cc \
   PHTrackPropagating.cc \
   PHTrackFitting.cc \
   PHTruthClustering.cc \
+  PHTruthSiliconAssociation.cc \
+  PHTruthTrackFitter.cc \
   PHTruthTrackSeeding.cc \
   PHTruthVertexing.cc \
-  PHTruthSiliconAssociation.cc \
   PrelimDistortionCorrection.cc \
   PrelimDistortionCorrectionAuAu.cc \
   SecondaryVertexFinder.cc \

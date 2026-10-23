@@ -50,11 +50,16 @@ class Fun4AllInputManager : public Fun4AllBase, public InputFileHandler
   void InputNode(const std::string &innode) { m_InputNode = innode; }
   const std::string &TopNodeName() const { return m_TopNodeName; }
   void Verbosity(const uint64_t ival) override;
-  
- protected:
+  virtual int NoRunTTree() {return -1;}
+
+  virtual void TTreeCacheSize(int64_t /*size*/) { return;}
+  virtual int64_t TTreeCacheSize() const { return -1; }
+
+  void DisableReadCache() { m_disable_read_cache_flag = true; }
+
+protected:
   Fun4AllInputManager(const std::string &name = "DUMMY", const std::string &nodename = "DST", const std::string &topnodename = "TOP");
   Fun4AllSyncManager *MySyncManager() { return m_MySyncManager; }
-  void DisableReadCache() { m_disable_read_cache_flag = true; }
   bool ReadCacheDisabled() const { return m_disable_read_cache_flag; }
 
  private:

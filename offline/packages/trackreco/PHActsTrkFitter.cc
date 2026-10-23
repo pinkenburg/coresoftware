@@ -27,11 +27,11 @@
 // #include <trackbase_historic/SvtxTrackState_v1.h>
 #include <trackbase_historic/SvtxTrackState_v3.h>
 #include <trackbase_historic/SvtxTrack_v4.h>
+#include <trackbase_historic/SvtxTrack_v5.h>
 #include <trackbase_historic/TrackSeed.h>
+//#include <trackbase_historic/SvtxTrackSeed_v3.h>
 #include <trackbase_historic/TrackSeedContainer.h>
 #include <trackbase_historic/TrackSeedHelper.h>
-
-#include <g4detectors/PHG4TpcGeomContainer.h>
 
 #include <micromegas/MicromegasDefs.h>
 
@@ -52,14 +52,23 @@
 #include <Acts/EventData/MultiTrajectoryHelpers.hpp>
 #include <Acts/EventData/SourceLink.hpp>
 #include <Acts/EventData/TrackParameters.hpp>
+#include <Acts/Surfaces/CylinderBounds.hpp>
 #include <Acts/Surfaces/PerigeeSurface.hpp>
 #include <Acts/Surfaces/Surface.hpp>
 #include <Acts/TrackFitting/GainMatrixSmoother.hpp>
 #include <Acts/TrackFitting/GainMatrixUpdater.hpp>
 
+#include <trackbase/alignmentTransformationContainer.h>
+#include <Eigen/Dense>
+#include <Eigen/Geometry>
+
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
+#include <set>
+#include <utility>
 #include <vector>
 
 namespace
@@ -69,28 +78,185 @@ namespace
   {
     return !(std::isnan(vec.x()) || std::isnan(vec.y()) || std::isnan(vec.z()));
   }
+
+  // square
   template <class T>
   inline T square(const T& x)
   {
     return x * x;
   }
+
+  // find nearest parameter in trajectory before a given sPhenix layer
+  [[maybe_unused]] std::optional<ActsPropagator::BoundTrackParamPair> find_nearest_params_before(
+    const Acts::VectorMultiTrajectory& traj,
+    const size_t trackTip,
+    const unsigned int layer )
+  {
+    bool found = false;
+    auto s = traj.getTrackState(trackTip);
+    traj.visitBackwards(trackTip, [&found, &s, &layer](const auto& state )
+    {
+      /// Only fill the track states with non-outlier measurement
+      if (!state.typeFlags().isMeasurement()) {return true;}
+
+      // only fill for state vectors with proper smoothed parameters
+      if( !state.hasSmoothed()) {return true;}
+
+      // get sphenix layer from acst volume and layer
+      unsigned int currentLayer = 0;
+      if( !ActsPropagator::checkSphenixLayer(
+        state.referenceSurface().getSharedPtr()->geometryId().volume(),
+        state.referenceSurface().getSharedPtr()->geometryId().layer(),
+        currentLayer ) ) { return true; }
+
+      // check layer
+      if( currentLayer >= layer ) { return true; }
+
+      // found correct state
+      /* store and abort loop */
+      s = state;
+      found = true;
+      return false;
+
+    });
+
+    if( found )
+    {
+
+      // get smoothed fitted parameters
+      Acts::BoundTrackParameters p(
+        s.referenceSurface().getSharedPtr(),
+        s.smoothed(),
+        s.smoothedCovariance(),
+        Acts::ParticleHypothesis::pion());
+      return std::make_pair( s.pathLength(), p );
+
+    }
+
+    return std::nullopt;
+
+  };
+
+  // find nearest parameter in trajectory after a given sPhenix layer
+  [[maybe_unused]] std::optional<ActsPropagator::BoundTrackParamPair> find_nearest_params_after(
+    const Acts::VectorMultiTrajectory& traj,
+    const size_t trackTip,
+    const unsigned int layer )
+  {
+    bool found = false;
+    auto s = traj.getTrackState(trackTip);
+    traj.visitBackwards(trackTip, [&found, &s, &layer](const auto& state )
+    {
+      /// Only fill the track states with non-outlier measurement
+      if (!state.typeFlags().isMeasurement()) {return true;}
+
+      // only fill for state vectors with proper smoothed parameters
+      if( !state.hasSmoothed()) {return true;}
+
+      // get sphenix layer from acst volume and layer
+      unsigned int currentLayer = 0;
+      if( !ActsPropagator::checkSphenixLayer(
+        state.referenceSurface().getSharedPtr()->geometryId().volume(),
+        state.referenceSurface().getSharedPtr()->geometryId().layer(),
+        currentLayer ) ) { return true; }
+
+      // check layer
+      if( currentLayer > layer ) {
+        s = state;
+        found = true;
+        return true;
+      }
+
+      return false;
+
+    });
+
+    if( found )
+    {
+
+      // get smoothed fitted parameters
+      Acts::BoundTrackParameters p(
+        s.referenceSurface().getSharedPtr(),
+        s.smoothed(),
+        s.smoothedCovariance(),
+        Acts::ParticleHypothesis::pion());
+      return std::make_pair( s.pathLength(), p );
+
+    }
+
+    return std::nullopt;
+  };
+
+
+  // calculate average track parameters
+  /* return the first, forward parameters in case of failure */
+  [[maybe_unused]] Acts::BoundTrackParameters calculateAverageParameters( const Acts::BoundTrackParameters& forward, const Acts::BoundTrackParameters& backward )
+  {
+    // check that surfaces are identical
+    if( forward.referenceSurface() != backward.referenceSurface() )
+    {
+      std::cout << "PHActsTrkFitter::calculateAverageParameters - surfaces are different. not averaging" << std::endl;
+      return forward;
+    }
+
+    // check particle hypothesis
+    if( forward.particleHypothesis() != backward.particleHypothesis() )
+    {
+      std::cout << "PHActsTrkFitter::calculateAverageParameters - particle hypotheses are different. not averaging" << std::endl;
+      return forward;
+    }
+
+    // check covariance matrices
+    if( !forward.covariance() )
+    {
+      std::cout << "PHActsTrkFitter::calculateAverageParameters - invalid forward covariance. not averaging" << std::endl;
+      return forward;
+    }
+
+    // check covariance matrices
+    if( !backward.covariance() )
+    {
+      std::cout << "PHActsTrkFitter::calculateAverageParameters - invalid backward covariance. not averaging" << std::endl;
+      return forward;
+    }
+
+    // perform the averaging
+    const auto forwardCovInv = forward.covariance().value().inverse();
+    const auto backwardCovInv = backward.covariance().value().inverse();
+    const auto covInv = forwardCovInv+backwardCovInv;
+    if (!covInv.allFinite() || std::abs(covInv.determinant()) < std::numeric_limits<double>::epsilon())
+    {
+      std::cout << "PHActsTrkFitter::calculateAverageParameters - combined information matrix is singular. not averaging" << std::endl;
+      return forward;
+    }
+
+    const auto cov = covInv.inverse();
+    if (!cov.allFinite())
+    {
+      std::cout << "PHActsTrkFitter::calculateAverageParameters - averaged covariance is not finite. not averaging" << std::endl;
+      return forward;
+    }
+
+    const auto parameters = cov*(forwardCovInv*forward.parameters() + backwardCovInv*backward.parameters());
+
+    // assign
+    return Acts::BoundTrackParameters(forward.referenceSurface().getSharedPtr(), parameters, cov, forward.particleHypothesis() );
+  }
+
 }  // namespace
 
-#include <trackbase/alignmentTransformationContainer.h>
-#include <Eigen/Dense>
-#include <Eigen/Geometry>
-
+//___________________________________________________________________________
 PHActsTrkFitter::PHActsTrkFitter(const std::string& name)
   : SubsysReco(name)
-{
-}
+{}
 
+//___________________________________________________________________________
 int PHActsTrkFitter::InitRun(PHCompositeNode* topNode)
 {
-  if (Verbosity() > 1)
-  {
-    std::cout << "Setup PHActsTrkFitter" << std::endl;
-  }
+
+  std::cout << "PHActsTrkFitter::InitRun - m_fitSiliconMMs: " << m_fitSiliconMMs << std::endl;
+  std::cout << "PHActsTrkFitter::InitRun - m_useMicromegas: " << m_useMicromegas << std::endl;
+  std::cout << "PHActsTrkFitter::InitRun - m_extrapolation_mode: " << (int)(m_extrapolation_mode) << std::endl;
 
   if (createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK)
   {
@@ -153,19 +319,12 @@ int PHActsTrkFitter::InitRun(PHCompositeNode* topNode)
 
   if (m_timeAnalysis)
   {
-    m_timeFile = new TFile(std::string(Name() + ".root").c_str(),
-                           "RECREATE");
-    h_eventTime = new TH1F("h_eventTime", ";time [ms]",
-                           100000, 0, 10000);
-    h_fitTime = new TH2F("h_fitTime", ";p_{T} [GeV];time [ms]",
-                         80, 0, 40, 100000, 0, 1000);
-    h_updateTime = new TH1F("h_updateTime", ";time [ms]",
-                            100000, 0, 1000);
-
-    h_rotTime = new TH1F("h_rotTime", ";time [ms]",
-                         100000, 0, 1000);
-    h_stateTime = new TH1F("h_stateTime", ";time [ms]",
-                           100000, 0, 1000);
+    m_timeFile = new TFile(std::string(Name() + ".root").c_str(), "RECREATE");
+    h_eventTime = new TH1F("h_eventTime", ";time [ms]", 100000, 0, 10000);
+    h_fitTime = new TH2F("h_fitTime", ";p_{T} [GeV];time [ms]", 80, 0, 40, 100000, 0, 1000);
+    h_updateTime = new TH1F("h_updateTime", ";time [ms]", 100000, 0, 1000);
+    h_rotTime = new TH1F("h_rotTime", ";time [ms]", 100000, 0, 1000);
+    h_stateTime = new TH1F("h_stateTime", ";time [ms]", 100000, 0, 1000);
   }
 
   if (m_actsEvaluator)
@@ -179,12 +338,7 @@ int PHActsTrkFitter::InitRun(PHCompositeNode* topNode)
     m_evaluator->verbosity(Verbosity());
   }
 
-  _tpccellgeo = findNode::getClass<PHG4TpcGeomContainer>(topNode, "TPCGEOMCONTAINER");
-  if (!_tpccellgeo)
-  {
-    std::cout << PHWHERE << " unable to find DST node TPCGEOMCONTAINER" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
+  _topNode = topNode;
 
   if (Verbosity() > 1)
   {
@@ -310,16 +464,22 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
 
     unsigned int tpcid = track->get_tpc_seed_index();
     unsigned int siid = track->get_silicon_seed_index();
+    auto *siseed = m_siliconSeeds->get(siid);
+    auto *tpcseed = m_tpcSeeds->get(tpcid);
+
+    short int best_crossing = track->get_crossing();  // best crossing between INTT clusters and TPC seed
+
+    if(Verbosity() > 2 && siseed && tpcseed)
+	  {
+	    std::cout << "tpc and si id " << tpcid << ", " << siid << " silicon_crossing " << siseed->get_crossing()
+		      << " tpc crossing " << tpcseed->get_crossing()
+		      << " best crossing " << best_crossing << " crossing estimate " << track->get_crossing_estimate() << std::endl;
+	  }
 
     // capture the input crossing value, and set crossing parameters
     //==============================
-    short silicon_crossing = SHRT_MAX;
-    auto *siseed = m_siliconSeeds->get(siid);
-    if (siseed)
-    {
-      silicon_crossing = siseed->get_crossing();
-    }
-    short crossing = silicon_crossing;
+
+    short int crossing = best_crossing;
     short int crossing_estimate = crossing;
 
     if (m_enable_crossing_estimate)
@@ -331,7 +491,7 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
     // must have silicon seed with valid crossing if we are doing a SC calibration fit
     if (m_fitSiliconMMs)
     {
-      if ((siid == std::numeric_limits<unsigned int>::max()) || (silicon_crossing == SHRT_MAX))
+      if ((siid == std::numeric_limits<unsigned int>::max()) || (crossing == SHRT_MAX))
       {
         continue;
       }
@@ -343,16 +503,8 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
       crossing = 0;
     }
 
-    if (Verbosity() > 1)
-    {
-      if (siseed)
-      {
-        std::cout << "tpc and si id " << tpcid << ", " << siid << " silicon_crossing " << silicon_crossing
-                  << " crossing " << crossing << " crossing estimate " << crossing_estimate << std::endl;
-      }
-    }
-
-    auto *tpcseed = m_tpcSeeds->get(tpcid);
+    // no path forward in this case, move on
+    if(crossing == SHRT_MAX && crossing_estimate == SHRT_MAX) { continue; }
 
     /// Need to also check that the tpc seed wasn't removed by the ghost finder
     if (!tpcseed)
@@ -362,8 +514,8 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
     }
 
     if (Verbosity() > 0)
-    {
-      if (siseed)
+      {
+	if (siseed)
       {
         const auto si_position = TrackSeedHelper::get_xyz(siseed);
         const auto tpc_position = TrackSeedHelper::get_xyz(tpcseed);
@@ -379,7 +531,7 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
     if (Verbosity() > 1 && siseed)
     {
       std::cout << " m_pp_mode " << m_pp_mode << " m_enable_crossing_estimate " << m_enable_crossing_estimate
-                << " INTT crossing " << crossing << " crossing_estimate " << crossing_estimate << std::endl;
+                << " best crossing " << crossing << " crossing_estimate " << crossing_estimate << std::endl;
     }
 
     short int this_crossing = crossing;
@@ -403,14 +555,14 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
       }
       else
       {
-        // use INTT crossing
+        // use best crossing
         crossing_estimate = crossing;
       }
     }
     else
     {
       // non pp mode, we want only crossing zero, veto others
-      if (siseed && silicon_crossing != 0)
+      if (siseed && best_crossing != 0)
       {
         crossing = 0;
         // continue;
@@ -419,7 +571,7 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
     }
 
     // Fit this track assuming either:
-    //    crossing = INTT value, if it exists (uses nvary = 0)
+    //    crossing = best crossing value, if it exists (uses nvary = 0)
     //    crossing = crossing_estimate +/- max_bunch_search, if no INTT value exists and m_enable_crossing_estimate flag is set.
 
     for (short int ivary = -nvary; ivary <= nvary; ++ivary)
@@ -436,7 +588,7 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
       SourceLinkVec sourceLinks;
 
       MakeSourceLinks makeSourceLinks;
-      makeSourceLinks.initialize(_tpccellgeo);
+      makeSourceLinks.initialize(m_tGeometry, _topNode);
       makeSourceLinks.setVerbosity(Verbosity());
       makeSourceLinks.set_pp_mode(m_pp_mode);
       makeSourceLinks.set_cluster_edge_rejection(m_cluster_edge_rejection);
@@ -463,7 +615,8 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
               m_clusterContainer,
               m_tGeometry,
               m_globalPositionWrapper,
-              this_crossing);
+              this_crossing, 
+              !m_forceSiOnlyFit); //for alignment tests, if forceSiOnlyFit is true, then we want to turn off the parametrized cluster errors when building source links
         }
 
         // tpc source links
@@ -519,17 +672,19 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
         // add tpc sourcelinks to silicon source links
         sourceLinks.insert(sourceLinks.end(), tpcSourceLinks.begin(), tpcSourceLinks.end());
       }
+
       Acts::GeometryContext geoContext{m_alignmentTransformationMapTransient};
+
       // copy transient map for this track into transient geoContext
       m_transient_geocontext = geoContext;
 
       // position comes from the silicon seed, unless there is no silicon seed
       Acts::Vector3 position(0, 0, 0);
-      if (siseed)
+      if (siseed && !m_ignoreSilicon)
       {
         position = TrackSeedHelper::get_xyz(siseed) * Acts::UnitConstants::cm;
       }
-      if (!siseed || !is_valid(position) || m_ignoreSilicon)
+      if (!siseed || !is_valid(position) || m_forceTpcOnlyFit)
       {
         position = TrackSeedHelper::get_xyz(tpcseed) * Acts::UnitConstants::cm;
       }
@@ -564,55 +719,9 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
           continue;
         }
 
-        for (const auto& surface_apr : m_materialSurfaces)
-        {
-          if (m_forceSiOnlyFit)
-          {
-            if (surface_apr->geometryId().volume() > 12)
-            {
-              continue;
-            }
-          }
-          bool pop_flag = false;
-          if (surface_apr->geometryId().approach() == 1)
-          {
-            surfaces.push_back(surface_apr);
-          }
-          else
-          {
-            pop_flag = true;
-            for (const auto& surface_sns : surfaces_tmp)
-            {
-              if (surface_apr->geometryId().volume() == surface_sns->geometryId().volume())
-              {
-                if (surface_apr->geometryId().layer() == surface_sns->geometryId().layer())
-                {
-                  pop_flag = false;
-                  surfaces.push_back(surface_sns);
-                }
-              }
-            }
-            if (!pop_flag)
-            {
-              surfaces.push_back(surface_apr);
-            }
-            else
-            {
-              surfaces.pop_back();
-              pop_flag = false;
-            }
-            if (surface_apr->geometryId().volume() == 12 && surface_apr->geometryId().layer() == 8)
-            {
-              for (const auto& surface_sns : surfaces_tmp)
-              {
-                if (14 == surface_sns->geometryId().volume())
-                {
-                  surfaces.push_back(surface_sns);
-                }
-              }
-            }
-          }
-        }
+        // add the material surfaces of the layers with measurements, sorted radially
+        surfaces = getDirectNavigationSurfaces(surfaces_tmp);
+
         checkSurfaceVec(surfaces);
         if (Verbosity() > 1)
         {
@@ -642,7 +751,7 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
       float seedphi = 0;
       float seedtheta = 0;
       float seedeta = 0;
-      if (siseed)
+      if (siseed && !m_forceTpcOnlyFit)
       {
         seedphi = siseed->get_phi();
         seedtheta = siseed->get_theta();
@@ -801,9 +910,9 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
           unsigned int trid = m_trackMap->size();
           svtx_vec[best_ivary].set_id(trid);
 
-          m_trackMap->insertWithKey(&svtx_vec[best_ivary], trid);
+          insertTrack(m_trackMap, &svtx_vec[best_ivary], trid);
         }
-        else  // case where INTT crossing is known
+        else  // case where crossing is known
         {
           SvtxTrack_v4 newTrack;
           newTrack.set_tpc_seed(tpcseed);
@@ -818,7 +927,7 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
             if (getTrackFitResult(result, track, &newTrack, tracks, measurements))
             {
               // insert in dedicated map
-              m_directedTrackMap->insertWithKey(&newTrack, trid);
+              insertTrack(m_directedTrackMap, &newTrack, trid);
             }
 
           }  // end insert track for SC calib fit
@@ -829,10 +938,10 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
 
             if (getTrackFitResult(result, track, &newTrack, tracks, measurements))
             {
-              m_trackMap->insertWithKey(&newTrack, trid);
+              insertTrack(m_trackMap, &newTrack, trid);
             }
           }  // end insert track for normal fit
-        }  // end case where INTT crossing is known
+        }  // end case where crossing is known
       }
       else if (!m_fitSiliconMMs)
       {
@@ -860,6 +969,25 @@ void PHActsTrkFitter::loopTracks(Acts::Logging::Level logLevel)
   return;
 }
 
+void PHActsTrkFitter::insertTrack(SvtxTrackMap* trackMap, const SvtxTrack* track, unsigned int trid) const
+{
+  if (m_useSlimTracks)
+  {
+    // the v4 track is used during the fit since its seed links are needed for the
+    // alignment states and evaluator. The v5 copy keeps only the per-detector cluster counts
+    SvtxTrack_v5 slimTrack(*track);
+
+    slimTrack.set_silicon_seed_id(m_siliconSeeds->find(track->get_silicon_seed()));
+    slimTrack.set_tpc_seed_id(m_tpcSeeds->find(track->get_tpc_seed()));
+ 
+    trackMap->insertWithKey(&slimTrack, trid);
+  }
+  else
+  {
+    trackMap->insertWithKey(track, trid);
+  }
+}
+
 bool PHActsTrkFitter::getTrackFitResult(
     const FitResult& fitOutput,
     TrackSeed* seed, SvtxTrack* track,
@@ -877,13 +1005,13 @@ bool PHActsTrkFitter::getTrackFitResult(
     Trajectory::IndexedParameters indexedParams;
 
     // retrieve track parameters from fit result
-    Acts::BoundTrackParameters parameters = ActsExamples::TrackParameters(outtrack.referenceSurface().getSharedPtr(),
-                                                                          outtrack.parameters(), outtrack.covariance(), outtrack.particleHypothesis());
+    const Acts::BoundTrackParameters parameters(
+      outtrack.referenceSurface().getSharedPtr(),
+      outtrack.parameters(),
+      outtrack.covariance(),
+      outtrack.particleHypothesis());
 
-    indexedParams.emplace(
-        outtrack.tipIndex(),
-        ActsExamples::TrackParameters{outtrack.referenceSurface().getSharedPtr(),
-                                      outtrack.parameters(), outtrack.covariance(), outtrack.particleHypothesis()});
+    indexedParams.emplace( outtrack.tipIndex(),parameters );
 
     if (Verbosity() > 2)
     {
@@ -927,7 +1055,7 @@ bool PHActsTrkFitter::getTrackFitResult(
     {
       h_updateTime->Fill(updateTime);
     }
-    
+
     if (m_actsEvaluator)
     {
       m_evaluator->evaluateTrackFit(tracks, trackTips, indexedParams, track,
@@ -980,6 +1108,9 @@ SourceLinkVec PHActsTrkFitter::filterSourceLinks(const SourceLinkVec& sourceLink
     if (m_forceSiOnlyFit && (m_tGeometry->maps().isMicromegasSurface(surf) || m_tGeometry->maps().isTpcSurface(surf)) )
     { continue; }
 
+    if (m_forceTpcOnlyFit && (m_tGeometry->maps().isMicromegasSurface(surf) || m_tGeometry->maps().isSiSurface(surf)) )
+    { continue; }
+
     // update vectors
     filtered.push_back(sl);
   }
@@ -995,7 +1126,120 @@ SurfacePtrVec PHActsTrkFitter::getSurfaceVector(const SourceLinkVec& sourceLinks
   {
     const ActsSourceLink asl = sl.get<ActsSourceLink>();
     const auto* const surf = m_tGeometry->geometry().tGeometry->findSurface(asl.geometryId());
+    //std::cout << "sl: " <<  surf->geometryId() << std::endl;
     surfaces.push_back(surf);
+  }
+
+  return surfaces;
+}
+
+//__________________________________________________________________________________
+double PHActsTrkFitter::getSurfaceRadius(const Acts::Surface* surface) const
+{
+  // approach and layer material surfaces are cylinders centered on the beam axis,
+  // so their center does not give their radial position
+  if (surface->type() == Acts::Surface::Cylinder)
+  {
+    const auto& bounds = static_cast<const Acts::CylinderBounds&>(surface->bounds());
+    return bounds.get(Acts::CylinderBounds::eR);
+  }
+
+  const Acts::Vector3 center = surface->center(m_tGeometry->geometry().getGeoContext());
+  return std::sqrt(center.x() * center.x() + center.y() * center.y());
+}
+
+//__________________________________________________________________________________
+SurfacePtrVec PHActsTrkFitter::getDirectNavigationSurfaces(const SurfacePtrVec& measurementSurfaces) const
+{
+  // the acts layer id does not follow the radial ordering of the surfaces it contains
+  // (e.g. tpc surfaces with vol=14|lay=16 span ~31-40 cm), so the layer id cannot be
+  // used to order the surfaces. Instead, collect the measurement surfaces and the
+  // non-sensitive material surfaces of the layers with measurements, and sort them by
+  // volume and radius
+  std::set<std::pair<unsigned int, unsigned int>> measurementLayers;
+  for (const auto* surface : measurementSurfaces)
+  {
+    measurementLayers.emplace(surface->geometryId().volume(), surface->geometryId().layer());
+  }
+
+  std::vector<std::pair<double, const Acts::Surface*>> sortedSurfaces;
+  sortedSurfaces.reserve(measurementSurfaces.size() + m_materialSurfaces.size());
+
+  // radii of the tpc measurement surfaces, used to reject tpc material surfaces
+  // that are too close to a measurement surface to be ordered reliably
+  std::vector<double> tpcMeasurementRadii;
+  for (const auto* surface : measurementSurfaces)
+  {
+    const double radius = getSurfaceRadius(surface);
+    sortedSurfaces.emplace_back(radius, surface);
+    if (m_tGeometry->maps().isTpcSurface(surface))
+    {
+      tpcMeasurementRadii.push_back(radius);
+    }
+  }
+  std::sort(tpcMeasurementRadii.begin(), tpcMeasurementRadii.end());
+
+  const auto closeToTpcMeasurement = [this, &tpcMeasurementRadii](double radius)
+  {
+    const auto iter = std::lower_bound(tpcMeasurementRadii.begin(), tpcMeasurementRadii.end(), radius);
+    if (iter != tpcMeasurementRadii.end() && *iter - radius < m_tpcMaterialSurfaceMargin)
+    {
+      return true;
+    }
+    return iter != tpcMeasurementRadii.begin() && radius - *std::prev(iter) < m_tpcMaterialSurfaceMargin;
+  };
+
+  for (const auto* surface : m_materialSurfaces)
+  {
+    // material on sensitive surfaces is picked up from the measurement surfaces
+    if (surface->geometryId().sensitive() != 0)
+    {
+      continue;
+    }
+
+    // only navigate through the material of layers with measurements
+    if (!measurementLayers.contains({surface->geometryId().volume(), surface->geometryId().layer()}))
+    {
+      continue;
+    }
+
+    const double radius = getSurfaceRadius(surface);
+
+    // the tpc approach surfaces of neighboring layers interleave with the measurement
+    // surfaces at the sub-mm level. A material surface placed just after a measurement
+    // surface it actually lies beyond makes the navigator skip that measurement, so
+    // drop tpc material surfaces that are too close to a measurement surface
+    if (m_tGeometry->maps().isTpcSurface(surface) && closeToTpcMeasurement(radius))
+    {
+      if (Verbosity() > 2)
+      {
+        std::cout << "PHActsTrkFitter::getDirectNavigationSurfaces - "
+                  << "removing material surface " << surface->geometryId()
+                  << " with radius " << radius << ", too close to a tpc measurement surface" << std::endl;
+      }
+      continue;
+    }
+
+    sortedSurfaces.emplace_back(radius, surface);
+  }
+
+  std::stable_sort(sortedSurfaces.begin(), sortedSurfaces.end(),
+                   [](const auto& lhs, const auto& rhs)
+                   {
+                     const auto lhsVolume = lhs.second->geometryId().volume();
+                     const auto rhsVolume = rhs.second->geometryId().volume();
+                     if (lhsVolume != rhsVolume)
+                     {
+                       return lhsVolume < rhsVolume;
+                     }
+                     return lhs.first < rhs.first;
+                   });
+
+  SurfacePtrVec surfaces;
+  surfaces.reserve(sortedSurfaces.size());
+  for (const auto& [radius, surface] : sortedSurfaces)
+  {
+    surfaces.push_back(surface);
   }
 
   return surfaces;
@@ -1003,26 +1247,52 @@ SurfacePtrVec PHActsTrkFitter::getSurfaceVector(const SourceLinkVec& sourceLinks
 
 void PHActsTrkFitter::checkSurfaceVec(SurfacePtrVec& surfaces) const
 {
+  if (surfaces.size() < 2)
+  {
+    return;
+  }
+
+  // Do not assume volume id has the correct layer, check the surface radius
+
   for (unsigned int i = 0; i < surfaces.size() - 1; i++)
   {
-    const auto& surface = surfaces.at(i);
-    const auto thisVolume = surface->geometryId().volume();
-    const auto thisLayer = surface->geometryId().layer();
 
-    const auto nextSurface = surfaces.at(i + 1);
+    const auto& surface = surfaces.at(i);
+    if (std::find(m_materialSurfaces.begin(), m_materialSurfaces.end(), surface) != m_materialSurfaces.end())
+    {
+      continue;
+    }
+
+    const auto thisVolume = surface->geometryId().volume();
+
+    const double thisRadius = getSurfaceRadius(surface);
+
+    const auto* nextSurface = surfaces.at(i + 1);
     const auto nextVolume = nextSurface->geometryId().volume();
-    const auto nextLayer = nextSurface->geometryId().layer();
+
+    const double nextRadius = getSurfaceRadius(nextSurface);
+
+    if (surface->geometryId().approach() == 2 || nextSurface->geometryId().approach() == 2)
+    {
+      continue;
+    }
 
     /// Implement a check to ensure surfaces are sorted
     if (nextVolume == thisVolume)
     {
-      if (nextLayer < thisLayer)
+      
+      //    if (nextLayer < thisLayer)
+      if (nextRadius < thisRadius)
       {
+        if(Verbosity() > 0)
+        {
         std::cout
             << "PHActsTrkFitter::checkSurfaceVec - "
             << "Surface not in order... removing surface"
-            << surface->geometryId() << std::endl;
-
+            << surface->geometryId() << " with radius " << thisRadius << std::endl;
+            std::cout << "   approach " << nextSurface->geometryId().approach() << " volume " << nextSurface->geometryId().volume() << " layer " << nextSurface->geometryId().layer() << std::endl;
+        std::cout << "    Next surface is " << nextSurface->geometryId() << " with radius " << nextRadius << std::endl;
+        }
         surfaces.erase(surfaces.begin() + i);
 
         /// Subtract one so we don't skip a surface
@@ -1066,16 +1336,14 @@ void PHActsTrkFitter::updateSvtxTrack(
     track->identify();
   }
 
-  if (!m_fitSiliconMMs && !m_forceSiOnlyFit)
+  if (!m_fitSiliconMMs && !m_forceSiOnlyFit && !m_forceTpcOnlyFit)
   {
     track->clear_states();
   }
 
   // create a state at pathlength = 0.0
   // This state holds the track parameters, which will be updated below
-  float pathlength = 0.0;
-  //  SvtxTrackState_v1 out(pathlength);
-  SvtxTrackState_v3 out(pathlength);
+  SvtxTrackState_v3 out( 0.0 );
   out.set_localX(0.0);
   out.set_localY(0.0);
   out.set_x(0.0);
@@ -1083,8 +1351,7 @@ void PHActsTrkFitter::updateSvtxTrack(
   out.set_z(0.0);
   track->insert_state(&out);
 
-  auto trajState =
-      Acts::MultiTrajectoryHelpers::trajectoryState(mj, trackTip);
+  auto trajState = Acts::MultiTrajectoryHelpers::trajectoryState(mj, trackTip);
 
   const auto& params = paramsMap.find(trackTip)->second;
 
@@ -1093,9 +1360,20 @@ void PHActsTrkFitter::updateSvtxTrack(
   track->set_y(params.position(m_transient_geocontext)(1) / Acts::UnitConstants::cm);
   track->set_z(params.position(m_transient_geocontext)(2) / Acts::UnitConstants::cm);
 
-  track->set_px(params.momentum()(0));
-  track->set_py(params.momentum()(1));
-  track->set_pz(params.momentum()(2));
+  auto* seed = track->get_tpc_seed();
+  
+  if(!m_forceSiOnlyFit || !m_siOnlyTpcSeedPt)
+  {
+    track->set_px(params.momentum()(0));
+    track->set_py(params.momentum()(1));
+    track->set_pz(params.momentum()(2));
+  }
+  else
+  {
+    track->set_px(seed->get_px());
+    track->set_py(seed->get_py());
+    track->set_pz(seed->get_pz());
+  }
 
   track->set_charge(params.charge());
   track->set_chisq(trajState.chi2Sum);
@@ -1130,7 +1408,7 @@ void PHActsTrkFitter::updateSvtxTrack(
 
   // in using silicon mm fit also extrapolate track parameters to all TPC surfaces with clusters
   // get all tpc clusters
-  auto* seed = track->get_tpc_seed();
+
   if (m_fitSiliconMMs && seed)
   {
     // acts propagator
@@ -1150,20 +1428,83 @@ void PHActsTrkFitter::updateSvtxTrack(
 
       // get layer, propagate
       const auto layer = TrkrDefs::getLayer(cluskey);
-      auto result = propagator.propagateTrack(params, layer);
-      if (!result.ok())
+      auto extrapolate = [&]( const ActsPropagator::BoundTrackParamPair& p, uint8_t l, Acts::Direction direction )
       {
-        continue;
-      }
 
-      // get path length and extrapolated parameters
-      auto& [pathLength, trackStateParams] = result.value();
-      pathLength /= Acts::UnitConstants::cm;
+        const auto& [source_pathlength, source_param] = p;
+        auto result = propagator.propagateTrack(source_param, l, direction);
+        if( result.ok() )
+        {
+          const auto& [pathLength, trackStateParams] = result.value();
+          transformer.addTrackState(track, cluskey, (source_pathlength+pathLength)/Acts::UnitConstants::cm, trackStateParams, m_transient_geocontext);
+        }
+      };
 
-      // create track state and add to track
-      transformer.addTrackState(track, cluskey, pathLength, trackStateParams, m_transient_geocontext);
-    }
-  }
+      if( m_extrapolation_mode == ExtrapolationMode::Legacy )
+      {
+
+        // extrapolate from track parameters
+        extrapolate( {0,params}, layer, Acts::Direction::Positive() );
+
+      } else {
+
+        // get before and after nearest parameters
+        const auto& nearest_params_forward = find_nearest_params_before( mj, trackTip, layer );
+        const auto& nearest_params_backward = find_nearest_params_after( mj, trackTip, layer );
+
+        // forward extrapolation
+        if( m_extrapolation_mode == ExtrapolationMode::Forward && nearest_params_forward )
+        {
+          // extrapolate from nearest forward parameters
+          extrapolate( nearest_params_forward.value(), layer, Acts::Direction::Positive() );
+        }
+
+        // forward extrapolation
+        if( m_extrapolation_mode == ExtrapolationMode::Backward && nearest_params_backward )
+        {
+          // extrapolate from nearest backward parameters
+          extrapolate( nearest_params_backward.value(), layer, Acts::Direction::Negative() );
+        }
+
+        // bidirectional extrapolation
+        if( m_extrapolation_mode == ExtrapolationMode::Bidirectional && ( nearest_params_forward || nearest_params_backward ) )
+        {
+
+          if( nearest_params_forward && nearest_params_backward )
+          {
+
+            const auto result_forward = propagator.propagateTrack(nearest_params_forward.value().second, layer, Acts::Direction::Positive());
+            const auto result_backward = propagator.propagateTrack(nearest_params_backward.value().second, layer, Acts::Direction::Negative());
+
+            if( result_forward.ok() && result_backward.ok() )
+            {
+              // calculate pathlenght (using the forward extrapolation only) and the weighted average track parameters
+              const auto pathlength = nearest_params_forward.value().first + result_forward.value().first;
+              const auto averaged_param = calculateAverageParameters( result_forward.value().second, result_backward.value().second );
+
+              // assign
+              transformer.addTrackState(track, cluskey, pathlength/Acts::UnitConstants::cm, averaged_param, m_transient_geocontext);
+            }
+
+          } else if( nearest_params_forward ) {
+
+            // extrapolate from nearest forward parameters
+            extrapolate( nearest_params_forward.value(), layer, Acts::Direction::Positive() );
+
+          } else {
+
+            // extrapolate from nearest backward parameters
+            extrapolate( nearest_params_backward.value(), layer, Acts::Direction::Negative() );
+
+          }
+
+        } // bidirectional extrapolation
+
+      } // forward/backward or bidirectional extrapolation
+
+    } // cluster loop
+
+  } // silicon-MM fitting.
 
   // also propagate to Micromegas if not used for the fit
   /* this is be used to get unbiased residuals in TPOT */
@@ -1175,6 +1516,7 @@ void PHActsTrkFitter::updateSvtxTrack(
     // loop over cluster keys associated to TPC seed
     for (auto key_iter = seed->begin_cluster_keys(); key_iter != seed->end_cluster_keys(); ++key_iter)
     {
+      // cluster key
       const auto& cluskey = *key_iter;
 
       // make sure cluster is from Micromegas (TPOT)
@@ -1182,23 +1524,61 @@ void PHActsTrkFitter::updateSvtxTrack(
       if (detId != TrkrDefs::micromegasId)
       { continue; }
 
+      // layer
+      const auto layer = TrkrDefs::getLayer(cluskey);
+
       // get corresponding surface
       const auto hitsetkey = TrkrDefs::getHitSetKeyFromClusKey(cluskey);
       const auto surface = m_tGeometry->maps().getMMSurface(hitsetkey);
       if (!surface) { continue; }
 
-      // propagate
-      auto result = propagator.propagateTrack(params, surface);
-      if (!result.ok()) { continue; }
+      // surface extrapolation
+      auto extrapolate = [&]( const ActsPropagator::BoundTrackParamPair& p, const Surface& s)
+      {
 
-      // get path length and extrapolated parameters
-      auto& [pathLength, trackStateParams] = result.value();
-      pathLength /= Acts::UnitConstants::cm;
+        const auto& [source_pathlength, source_param] = p;
+        auto result = propagator.propagateTrack(source_param, s);
+        if( result.ok() )
+        {
+          const auto& [pathLength, trackStateParams] = result.value();
+          transformer.addTrackState(track, cluskey, (source_pathlength+pathLength)/Acts::UnitConstants::cm, trackStateParams, m_transient_geocontext);
+        }
+      };
 
-      // create track state and add to track
-      transformer.addTrackState(track, cluskey, pathLength, trackStateParams, m_transient_geocontext);
-    }
-  }
+      switch( m_extrapolation_mode )
+      {
+        case ExtrapolationMode::Legacy:
+        {
+
+          // extrapolate from track parameters
+          extrapolate( {0,params}, surface );
+          break;
+        }
+
+        case ExtrapolationMode::Forward:
+        case ExtrapolationMode::Bidirectional:
+        {
+          // find nearest parameters before TPOT
+          const auto& nearest_params_forward = find_nearest_params_before( mj, trackTip, layer );
+
+          // perform extrapolation
+          if( nearest_params_forward )
+          {
+            // extrapolate from nearest forward parameters
+            extrapolate( nearest_params_forward.value(), surface );
+          }
+          break;
+        }
+
+        case ExtrapolationMode::Backward:
+        {
+          // cannot use backward extrapolation to TPOT since this is the outermost detector.
+          // doing nothing
+          break;
+        }
+      } // extrapolation mode
+    } // cluster loop
+  } // check on TPOT enabled
 
   trackStateTimer.stop();
   auto stateTime = trackStateTimer.get_accumulated_time();
